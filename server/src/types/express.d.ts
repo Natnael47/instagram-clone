@@ -1,5 +1,5 @@
-import type { UserDocument } from "@models/User";
 import type { File as MulterFile } from "multer";
+import type { UserDocument } from "../models/User";
 
 declare global {
   namespace Express {
