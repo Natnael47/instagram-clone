@@ -29,6 +29,7 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "baseUrl": ".",
+    "ignoreDeprecations": "6.0",
 
     // Path Aliases (TypeScript 6 way)
     "paths": {

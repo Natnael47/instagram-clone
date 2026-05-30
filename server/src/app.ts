@@ -1,0 +1,63 @@
+import { env } from "@config/env";
+import { errorHandler, notFound } from "@middleware/error.middleware";
+import routes from "@routes/index";
+import { logger } from "@utils/logger";
+import cors from "cors";
+import express, { type Request, type Response } from "express";
+import helmet from "helmet";
+
+const app = express();
+
+// Security middleware
+app.use(helmet());
+app.use(
+  cors({
+    origin: env.CLIENT_URL,
+    credentials: true,
+  }),
+);
+
+// Request logging with Pino
+app.use((req: Request, res: Response, next) => {
+  const start = Date.now();
+
+  res.on("finish", () => {
+    const duration = Date.now() - start;
+    logger.info(
+      {
+        method: req.method,
+        url: req.originalUrl,
+        status: res.statusCode,
+        duration: `${duration}ms`,
+      },
+      `${req.method} ${req.originalUrl} ${res.statusCode} ${duration}ms`,
+    );
+  });
+
+  next();
+});
+
+// Body parsing
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+// Static files
+app.use("/uploads", express.static("uploads"));
+
+// Health check
+app.get("/health", (_req: Request, res: Response) => {
+  res.json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    environment: env.NODE_ENV,
+  });
+});
+
+// API routes
+app.use("/api/v1", routes);
+
+// Error handling
+app.use(notFound);
+app.use(errorHandler);
+
+export default app;

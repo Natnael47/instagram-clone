@@ -13,6 +13,7 @@ const envSchema = z.object({
   CLOUDINARY_API_KEY: z.string().optional(),
   CLOUDINARY_API_SECRET: z.string().optional(),
   CLIENT_URL: z.string().default("http://localhost:19000"),
+  LOG_LEVEL: z.enum(["error", "warn", "info", "debug"]).default("info"),
 });
 
 export type EnvType = z.infer<typeof envSchema>;
