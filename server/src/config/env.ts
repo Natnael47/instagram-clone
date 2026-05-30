@@ -1,0 +1,28 @@
+import { z } from "zod";
+
+// Zod 4.x uses ._def instead of .shape, but the API is similar
+const envSchema = z.object({
+  NODE_ENV: z
+    .enum(["development", "production", "test"])
+    .default("development"),
+  PORT: z.coerce.number().default(5000),
+  MONGODB_URI: z.string().min(1, "MongoDB URI is required"),
+  JWT_SECRET: z.string().min(32, "JWT secret must be at least 32 characters"),
+  JWT_EXPIRES_IN: z.string().default("7d"),
+  CLOUDINARY_CLOUD_NAME: z.string().optional(),
+  CLOUDINARY_API_KEY: z.string().optional(),
+  CLOUDINARY_API_SECRET: z.string().optional(),
+  CLIENT_URL: z.string().default("http://localhost:19000"),
+});
+
+export type EnvType = z.infer<typeof envSchema>;
+
+// Parse environment variables
+const parsedEnv = envSchema.safeParse(process.env);
+
+if (!parsedEnv.success) {
+  console.error("❌ Invalid environment variables:", parsedEnv.error.issues);
+  process.exit(1);
+}
+
+export const env = parsedEnv.data;
