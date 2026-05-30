@@ -1,5 +1,4 @@
-import { Schema, model, type Document } from "mongoose";
-import type { UserDocument } from "./User";
+import { Schema, Types, model, type Document } from "mongoose";
 
 /**
  * Notification types
@@ -13,12 +12,13 @@ export type NotificationType =
 
 /**
  * Interface for Notification document
+ * Use Types.ObjectId directly instead of union types with UserDocument
  */
 export interface INotification {
-  recipient: Schema.Types.ObjectId | UserDocument;
-  sender: Schema.Types.ObjectId | UserDocument;
+  recipient: Types.ObjectId;
+  sender: Types.ObjectId;
   type: NotificationType;
-  entityId: Schema.Types.ObjectId;
+  entityId: Types.ObjectId;
   message: string;
   isRead: boolean;
   createdAt: Date;
