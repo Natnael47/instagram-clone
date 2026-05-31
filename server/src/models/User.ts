@@ -1,9 +1,6 @@
 import bcrypt from "bcryptjs";
-import { Schema, model, type Document, type Model } from "mongoose";
+import { Schema, Types, model, type Document, type Model } from "mongoose";
 
-/**
- * Interface for User document
- */
 export interface IUser {
   username: string;
   email: string;
@@ -11,10 +8,10 @@ export interface IUser {
   fullName: string;
   bio?: string;
   profilePicture?: string;
-  followers: Schema.Types.ObjectId[];
-  following: Schema.Types.ObjectId[];
-  posts: Schema.Types.ObjectId[];
-  stories: Schema.Types.ObjectId[];
+  followers: Types.ObjectId[];
+  following: Types.ObjectId[];
+  posts: Types.ObjectId[];
+  stories: Types.ObjectId[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -25,7 +22,6 @@ export interface IUserMethods {
 
 export interface UserDocument extends Document, IUser, IUserMethods {}
 
-// Virtual field types
 interface UserVirtuals {
   followerCount: number;
   followingCount: number;
@@ -129,25 +125,20 @@ const userSchema = new Schema<
   },
 );
 
-// Virtuals
 userSchema.virtual("followerCount").get(function (this: UserDocument) {
-  return this.followers.length;
+  return this.followers?.length || 0;
 });
 
 userSchema.virtual("followingCount").get(function (this: UserDocument) {
-  return this.following.length;
+  return this.following?.length || 0;
 });
 
 userSchema.virtual("postCount").get(function (this: UserDocument) {
-  return this.posts.length;
+  return this.posts?.length || 0;
 });
 
-// Indexes
-userSchema.index({ username: 1 });
-userSchema.index({ email: 1 });
 userSchema.index({ createdAt: -1 });
 
-// Hash password before save
 userSchema.pre("save", async function () {
   if (!this.isModified("password")) {
     return;
@@ -157,7 +148,6 @@ userSchema.pre("save", async function () {
   this.password = await bcrypt.hash(this.password, salt);
 });
 
-// Compare entered password with hashed password
 userSchema.methods.matchPassword = async function (
   enteredPassword: string,
 ): Promise<boolean> {
