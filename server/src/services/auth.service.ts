@@ -1,6 +1,10 @@
 import { User, type UserDocument } from "@models/User";
 import { ApiError } from "@utils/ApiError";
-import { generateToken, verifyToken } from "@utils/generateToken";
+import {
+  generateAccessToken,
+  generateRefreshToken,
+  verifyToken,
+} from "@utils/generateToken";
 import { logger } from "@utils/logger";
 
 /**
@@ -8,19 +12,17 @@ import { logger } from "@utils/logger";
  * Handles user registration, login, and password management
  */
 export class AuthService {
-  /**
-   * Register a new user
-   * @param userData - User registration data
-   * @returns Created user object (without password) and JWT token
-   */
   static async register(userData: {
     username: string;
     email: string;
     password: string;
     fullName: string;
     bio?: string;
-  }): Promise<{ user: Partial<UserDocument>; token: string }> {
-    // Check if user already exists
+  }): Promise<{
+    user: Partial<UserDocument>;
+    accessToken: string;
+    refreshToken: string;
+  }> {
     const existingUser = await User.findOne({
       $or: [{ email: userData.email }, { username: userData.username }],
     });
@@ -34,7 +36,6 @@ export class AuthService {
       }
     }
 
-    // Create user
     const user = await User.create({
       username: userData.username,
       email: userData.email,
@@ -50,28 +51,23 @@ export class AuthService {
 
     logger.info({ userId: user._id, email: user.email }, "New user registered");
 
-    // Generate token
-    const token = generateToken(user._id.toString());
+    const accessToken = generateAccessToken(user._id.toString());
+    const refreshToken = generateRefreshToken(user._id.toString());
 
-    // Return user without password
     const userWithoutPassword = user.toObject();
-    // Use type assertion to safely delete password
     const { password, ...userWithoutPass } = userWithoutPassword;
 
-    return { user: userWithoutPass, token };
+    return { user: userWithoutPass, accessToken, refreshToken };
   }
 
-  /**
-   * Login user
-   * @param emailOrUsername - Email or username
-   * @param password - User password
-   * @returns User object and JWT token
-   */
   static async login(
     emailOrUsername: string,
     password: string,
-  ): Promise<{ user: Partial<UserDocument>; token: string }> {
-    // Find user by email or username
+  ): Promise<{
+    user: Partial<UserDocument>;
+    accessToken: string;
+    refreshToken: string;
+  }> {
     const user = await User.findOne({
       $or: [{ email: emailOrUsername }, { username: emailOrUsername }],
     }).select("+password");
@@ -80,22 +76,41 @@ export class AuthService {
       throw ApiError.unauthorized("Invalid credentials");
     }
 
-    // Check password
     const isPasswordMatch = await user.matchPassword(password);
     if (!isPasswordMatch) {
       throw ApiError.unauthorized("Invalid credentials");
     }
 
-    // Generate token
-    const token = generateToken(user._id.toString());
+    const accessToken = generateAccessToken(user._id.toString());
+    const refreshToken = generateRefreshToken(user._id.toString());
 
     logger.info({ userId: user._id, email: user.email }, "User logged in");
 
-    // Return user without password
     const userObject = user.toObject();
     const { password: _, ...userWithoutPassword } = userObject;
 
-    return { user: userWithoutPassword, token };
+    return { user: userWithoutPassword, accessToken, refreshToken };
+  }
+
+  static async refreshAccessToken(
+    refreshToken: string,
+  ): Promise<{ accessToken: string }> {
+    const decoded = verifyToken(refreshToken);
+
+    if (!decoded || decoded.type !== "refresh") {
+      throw ApiError.unauthorized("Invalid refresh token");
+    }
+
+    const user = await User.findById(decoded.id);
+    if (!user) {
+      throw ApiError.unauthorized("User not found");
+    }
+
+    const accessToken = generateAccessToken(user._id.toString());
+
+    logger.info({ userId: user._id }, "Access token refreshed");
+
+    return { accessToken };
   }
 
   /**
@@ -159,7 +174,7 @@ export class AuthService {
     }
 
     // Generate reset token (using JWT)
-    const resetToken = generateToken(user._id.toString());
+    const resetToken = generateAccessToken(user._id.toString());
 
     logger.info({ userId: user._id, email }, "Password reset token generated");
 

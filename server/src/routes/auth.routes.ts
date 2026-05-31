@@ -45,5 +45,6 @@ router.post(
   uploadSingle("profilePicture"),
   AuthController.updateProfile,
 );
+router.post("/refresh", AuthController.refreshToken);
 
 export default router;

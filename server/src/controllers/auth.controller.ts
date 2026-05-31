@@ -1,5 +1,6 @@
 import { asyncHandler } from "@middleware/asyncHandler";
 import { AuthService } from "@services/auth.service";
+import { ApiError } from "@utils/ApiError";
 import { ApiResponse } from "@utils/ApiResponse";
 import { logger } from "@utils/logger";
 import { Request, Response } from "express";
@@ -16,7 +17,7 @@ export class AuthController {
   static register = asyncHandler(async (req: Request, res: Response) => {
     const { username, email, password, fullName, bio } = req.body;
 
-    const { user, token } = await AuthService.register({
+    const { user, accessToken, refreshToken } = await AuthService.register({
       username,
       email,
       password,
@@ -29,7 +30,8 @@ export class AuthController {
     res.status(201).json(
       ApiResponse.success("User registered successfully", {
         user,
-        token,
+        accessToken,
+        refreshToken,
       }),
     );
   });
@@ -41,7 +43,7 @@ export class AuthController {
   static login = asyncHandler(async (req: Request, res: Response) => {
     const { email, password } = req.body;
 
-    const { user, token } = await AuthService.login(email, password);
+    const { user, accessToken, refreshToken } = await AuthService.login(email, password);
 
     logger.info(
       { userId: user._id, email: user.email },
@@ -51,7 +53,8 @@ export class AuthController {
     res.status(200).json(
       ApiResponse.success("Login successful", {
         user,
-        token,
+        accessToken,
+        refreshToken,
       }),
     );
   });
@@ -166,5 +169,19 @@ export class AuthController {
     }
 
     res.status(200).json(ApiResponse.success("Logout successful"));
+  });
+
+  static refreshToken = asyncHandler(async (req: Request, res: Response) => {
+    const { refreshToken } = req.body;
+
+    if (!refreshToken) {
+      throw ApiError.badRequest("Refresh token is required");
+    }
+
+    const result = await AuthService.refreshAccessToken(refreshToken);
+
+    res
+      .status(200)
+      .json(ApiResponse.success("Token refreshed successfully", result));
   });
 }
