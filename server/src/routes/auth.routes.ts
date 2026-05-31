@@ -1,5 +1,6 @@
 import { AuthController } from "@controllers/auth.controller";
 import { protect } from "@middleware/auth.middleware";
+import { authLimiter } from "@middleware/rateLimiter";
 import { uploadSingle } from "@middleware/upload.middleware";
 import { validate } from "@middleware/validate.middleware";
 import {
@@ -13,16 +14,28 @@ import { Router } from "express";
 
 const router = Router();
 
-// Public routes
-router.post("/register", validate(registerValidator), AuthController.register);
-router.post("/login", validate(loginValidator), AuthController.login);
+// Public routes with strict rate limiting
+router.post(
+  "/register",
+  authLimiter,
+  validate(registerValidator),
+  AuthController.register,
+);
+router.post(
+  "/login",
+  authLimiter,
+  validate(loginValidator),
+  AuthController.login,
+);
 router.post(
   "/forgot-password",
+  authLimiter,
   validate(forgotPasswordValidator),
   AuthController.forgotPassword,
 );
 router.post(
   "/reset-password",
+  authLimiter,
   validate(resetPasswordValidator),
   AuthController.resetPassword,
 );

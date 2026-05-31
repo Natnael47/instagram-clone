@@ -1,5 +1,6 @@
 import { env } from "@config/env";
 import { errorHandler, notFound } from "@middleware/error.middleware";
+import { apiLimiter } from "@middleware/rateLimiter";
 import routes from "@routes/index";
 import { logger } from "@utils/logger";
 import cors from "cors";
@@ -48,7 +49,8 @@ app.get("/health", (_req: Request, res: Response) => {
   });
 });
 
-app.use("/api/v1", routes);
+// Global rate limit on all API routes
+app.use("/api/v1", apiLimiter, routes);
 
 app.use(notFound);
 app.use(errorHandler);
