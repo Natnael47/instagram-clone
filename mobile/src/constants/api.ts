@@ -1,0 +1,20 @@
+export const API_TIMEOUT = 15000;
+
+export const PAGINATION = {
+  DEFAULT_PAGE: 1,
+  DEFAULT_LIMIT: 20,
+  FEED_LIMIT: 10,
+  COMMENTS_LIMIT: 20,
+  NOTIFICATIONS_LIMIT: 20,
+  SEARCH_LIMIT: 20,
+  CONVERSATIONS_LIMIT: 20,
+  MESSAGES_LIMIT: 50,
+};
+
+export const UPLOAD = {
+  MAX_FILE_SIZE: 5 * 1024 * 1024,
+  ALLOWED_TYPES: ["image/jpeg", "image/jpg", "image/png", "image/webp"],
+  IMAGE_QUALITY: 0.8,
+  MAX_WIDTH: 1200,
+  MAX_HEIGHT: 1200,
+};
