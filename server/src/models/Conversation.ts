@@ -1,13 +1,10 @@
-import { Schema, model, type Document } from "mongoose";
+import { model, Schema, Types, type Document } from "mongoose";
 import type { UserDocument } from "./User";
 
-/**
- * Interface for Conversation document
- */
 export interface IConversation {
-  participants: Schema.Types.ObjectId[] | UserDocument[];
-  lastMessage?: string;
-  lastMessageAt?: Date;
+  participants: (Types.ObjectId | UserDocument)[];
+  lastMessage: string;
+  lastMessageAt: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -39,14 +36,12 @@ const conversationSchema = new Schema<ConversationDocument>(
   },
 );
 
-// Virtual for participant count
 conversationSchema.virtual("participantCount").get(function (
   this: ConversationDocument,
 ) {
   return this.participants.length;
 });
 
-// Indexes
 conversationSchema.index({ participants: 1 });
 conversationSchema.index({ lastMessageAt: -1 });
 conversationSchema.index({ participants: 1, updatedAt: -1 });

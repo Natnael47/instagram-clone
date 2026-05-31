@@ -1,13 +1,10 @@
-import { Schema, model, type Document } from "mongoose";
+import { model, Schema, Types, type Document } from "mongoose";
 import type { ConversationDocument } from "./Conversation";
 import type { UserDocument } from "./User";
 
-/**
- * Interface for Message document
- */
 export interface IMessage {
-  conversation: Schema.Types.ObjectId | ConversationDocument;
-  sender: Schema.Types.ObjectId | UserDocument;
+  conversation: Types.ObjectId | ConversationDocument;
+  sender: Types.ObjectId | UserDocument;
   text: string;
   isRead: boolean;
   readAt?: Date;
@@ -53,10 +50,9 @@ const messageSchema = new Schema<MessageDocument>(
   },
 );
 
-// Indexes
 messageSchema.index({ conversation: 1, createdAt: -1 });
 messageSchema.index({ sender: 1 });
 messageSchema.index({ conversation: 1, isRead: 1 });
-messageSchema.index({ createdAt: 1 }, { expireAfterSeconds: 2592000 }); // Auto-delete after 30 days
+messageSchema.index({ createdAt: 1 }, { expireAfterSeconds: 2592000 });
 
 export const Message = model<MessageDocument>("Message", messageSchema);

@@ -1,13 +1,10 @@
-import { Schema, model, type Document } from "mongoose";
+import { Schema, Types, model, type Document } from "mongoose";
 import type { UserDocument } from "./User";
 
-/**
- * Interface for Story document
- */
 export interface IStory {
   imageUrl: string;
-  author: Schema.Types.ObjectId | UserDocument;
-  viewers: Schema.Types.ObjectId[] | UserDocument[];
+  author: Types.ObjectId | UserDocument;
+  viewers: (Types.ObjectId | UserDocument)[];
   expiresAt: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -35,7 +32,7 @@ const storySchema = new Schema<StoryDocument>(
     expiresAt: {
       type: Date,
       required: true,
-      default: () => new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours from creation
+      default: () => new Date(Date.now() + 24 * 60 * 60 * 1000),
     },
   },
   {
@@ -45,21 +42,17 @@ const storySchema = new Schema<StoryDocument>(
   },
 );
 
-// Virtual for viewer count
 storySchema.virtual("viewerCount").get(function (this: StoryDocument) {
   return this.viewers.length;
 });
 
-// Virtual to check if story is expired
 storySchema.virtual("isExpired").get(function (this: StoryDocument) {
   return new Date() > this.expiresAt;
 });
 
-// Indexes
 storySchema.index({ author: 1, createdAt: -1 });
 storySchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
-// Only return non-expired stories by default
 storySchema.pre("find", function () {
   this.where({ expiresAt: { $gt: new Date() } });
 });
