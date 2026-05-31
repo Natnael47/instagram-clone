@@ -1,4 +1,5 @@
 import { User } from "@models/User";
+import { NotificationService } from "@services/notification.service";
 import { getIO } from "@socket/index";
 import { ApiError } from "@utils/ApiError";
 import { logger } from "@utils/logger";
@@ -45,58 +46,46 @@ export class UserService {
       throw ApiError.badRequest("You cannot follow yourself");
     }
 
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
-    try {
-      const targetUser = await User.findById(targetUserId);
-      if (!targetUser) {
-        throw ApiError.notFound("User to follow not found");
-      }
-
-      const follower = await User.findById(followerId);
-      if (!follower) {
-        throw ApiError.notFound("Follower not found");
-      }
-
-      if (follower.following.some((id) => id.toString() === targetUserId)) {
-        throw ApiError.badRequest("Already following this user");
-      }
-
-      await User.findByIdAndUpdate(
-        followerId,
-        { $addToSet: { following: new mongoose.Types.ObjectId(targetUserId) } },
-        { session },
-      );
-
-      await User.findByIdAndUpdate(
-        targetUserId,
-        { $addToSet: { followers: new mongoose.Types.ObjectId(followerId) } },
-        { session },
-      );
-
-      await session.commitTransaction();
-
-      // Socket: Notify target user about new follower
-      try {
-        const io = getIO();
-        io.to(`user:${targetUserId}`).emit("new-follower", {
-          followerId,
-        });
-      } catch (socketError) {
-        logger.error(socketError, "Failed to emit new-follower socket event");
-      }
-
-      logger.info(
-        { followerId, targetUserId },
-        "User started following another user",
-      );
-    } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
-      session.endSession();
+    const targetUser = await User.findById(targetUserId);
+    if (!targetUser) {
+      throw ApiError.notFound("User to follow not found");
     }
+
+    const follower = await User.findById(followerId);
+    if (!follower) {
+      throw ApiError.notFound("Follower not found");
+    }
+
+    if (follower.following.some((id) => id.toString() === targetUserId)) {
+      throw ApiError.badRequest("Already following this user");
+    }
+
+    await User.findByIdAndUpdate(followerId, {
+      $addToSet: { following: new mongoose.Types.ObjectId(targetUserId) },
+    });
+
+    await User.findByIdAndUpdate(targetUserId, {
+      $addToSet: { followers: new mongoose.Types.ObjectId(followerId) },
+    });
+
+    // Create notification
+    await NotificationService.createFollowNotification(
+      targetUserId,
+      followerId,
+    );
+
+    // Socket notification
+    try {
+      const io = getIO();
+      io.to(`user:${targetUserId}`).emit("new-follower", { followerId });
+    } catch (socketError) {
+      logger.error(socketError, "Failed to emit new-follower socket event");
+    }
+
+    logger.info(
+      { followerId, targetUserId },
+      "User started following another user",
+    );
   }
 
   static async unfollowUser(
@@ -107,36 +96,20 @@ export class UserService {
       throw ApiError.badRequest("You cannot unfollow yourself");
     }
 
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
-    try {
-      const targetUser = await User.findById(targetUserId);
-      if (!targetUser) {
-        throw ApiError.notFound("User to unfollow not found");
-      }
-
-      await User.findByIdAndUpdate(
-        followerId,
-        { $pull: { following: new mongoose.Types.ObjectId(targetUserId) } },
-        { session },
-      );
-
-      await User.findByIdAndUpdate(
-        targetUserId,
-        { $pull: { followers: new mongoose.Types.ObjectId(followerId) } },
-        { session },
-      );
-
-      await session.commitTransaction();
-
-      logger.info({ followerId, targetUserId }, "User unfollowed another user");
-    } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
-      session.endSession();
+    const targetUser = await User.findById(targetUserId);
+    if (!targetUser) {
+      throw ApiError.notFound("User to unfollow not found");
     }
+
+    await User.findByIdAndUpdate(followerId, {
+      $pull: { following: new mongoose.Types.ObjectId(targetUserId) },
+    });
+
+    await User.findByIdAndUpdate(targetUserId, {
+      $pull: { followers: new mongoose.Types.ObjectId(followerId) },
+    });
+
+    logger.info({ followerId, targetUserId }, "User unfollowed another user");
   }
 
   static async searchUsers(

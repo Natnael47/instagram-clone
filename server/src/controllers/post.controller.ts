@@ -128,7 +128,7 @@ export class PostController {
     const comment = await PostService.addComment(postId, userId, text);
 
     logger.info(
-      { postId, userId, commentId: (comment as any)._id?.toString() },
+      { postId, userId, commentId: comment._id.toString() },
       "Comment added",
     );
 
@@ -205,25 +205,27 @@ export class PostController {
     },
   );
 
-    /**
+  /**
    * Get personalized feed for the authenticated user
    * GET /api/v1/posts/feed
    */
-  static getPersonalizedFeed = asyncHandler(async (req: Request, res: Response) => {
-    const userId = req.user?._id.toString();
-    if (!userId) {
-      throw new Error("User not authenticated");
-    }
+  static getPersonalizedFeed = asyncHandler(
+    async (req: Request, res: Response) => {
+      const userId = req.user?._id.toString();
+      if (!userId) {
+        throw new Error("User not authenticated");
+      }
 
-    const page = req.query.page as string;
-    const limit = req.query.limit as string;
+      const page = req.query.page as string;
+      const limit = req.query.limit as string;
 
-    const result = await PostService.getPersonalizedFeed(userId, page, limit);
+      const result = await PostService.getPersonalizedFeed(userId, page, limit);
 
-    logger.info({ userId, page, limit }, "Personalized feed retrieved");
+      logger.info({ userId, page, limit }, "Personalized feed retrieved");
 
-    res
-      .status(200)
-      .json(ApiResponse.success("Feed retrieved successfully", result));
-  });
+      res
+        .status(200)
+        .json(ApiResponse.success("Feed retrieved successfully", result));
+    },
+  );
 }

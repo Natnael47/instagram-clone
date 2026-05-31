@@ -141,6 +141,11 @@ export class CommentService {
 
     await Comment.deleteMany({ parentComment: comment._id });
 
+    // Remove reference from Post if it exists
+    await Post.findByIdAndUpdate(comment.post, {
+      $pull: { comments: comment._id },
+    });
+
     await comment.deleteOne();
 
     logger.info({ commentId, userId }, "Comment deleted");

@@ -13,12 +13,29 @@ import { Router } from "express";
 
 const router = Router();
 
-// Public routes
+// Static routes (must be before dynamic :id routes)
 router.get(
   "/search",
   validate(searchUsersValidator),
   UserController.searchUsers,
 );
+router.get("/suggestions", protect, UserController.getSuggestedUsers);
+
+// Protected POST routes
+router.post(
+  "/:id/follow",
+  protect,
+  validate(followUserValidator),
+  UserController.followUser,
+);
+router.post(
+  "/:id/unfollow",
+  protect,
+  validate(unfollowUserValidator),
+  UserController.unfollowUser,
+);
+
+// Dynamic :id routes
 router.get(
   "/:id",
   validate(getUserProfileValidator),
@@ -34,20 +51,5 @@ router.get(
   validate(getFollowingValidator),
   UserController.getFollowing,
 );
-
-// Protected routes
-router.post(
-  "/:id/follow",
-  protect,
-  validate(followUserValidator),
-  UserController.followUser,
-);
-router.post(
-  "/:id/unfollow",
-  protect,
-  validate(unfollowUserValidator),
-  UserController.unfollowUser,
-);
-router.get("/suggestions", protect, UserController.getSuggestedUsers);
 
 export default router;

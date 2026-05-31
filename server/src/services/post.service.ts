@@ -1,13 +1,15 @@
-import { Post, type IComment, type PostDocument } from "@models/Post";
+import { Comment } from "@models/Comment";
+import { Post, type PostDocument } from "@models/Post";
 import { User } from "@models/User";
 import { getIO } from "@socket/index";
 import { ApiError } from "@utils/ApiError";
 import { logger } from "@utils/logger";
+import { NotificationService } from "@services/notification.service";
 import {
   formatPaginatedResult,
   parsePaginationParams,
 } from "@utils/pagination";
-import mongoose from "mongoose";
+import mongoose, { Types } from "mongoose";
 
 export class PostService {
   static async createPost(
@@ -19,56 +21,41 @@ export class PostService {
       throw ApiError.badRequest("Image is required");
     }
 
-    const session = await mongoose.startSession();
-    session.startTransaction();
+    const post = new Post({
+      author: new mongoose.Types.ObjectId(authorId),
+      imageUrl,
+      caption: caption || "",
+      likes: [],
+      comments: [],
+    });
+
+    await post.save();
+
+    await User.findByIdAndUpdate(authorId, {
+      $push: { posts: post._id },
+    });
+
+    await post.populate("author", "username fullName profilePicture");
 
     try {
-      const post = new Post({
-        author: new mongoose.Types.ObjectId(authorId),
-        imageUrl,
-        caption: caption || "",
-        likes: [],
-        comments: [],
-      });
-
-      await post.save({ session });
-
-      await User.findByIdAndUpdate(
-        authorId,
-        { $push: { posts: post._id } },
-        { session },
-      );
-
-      await session.commitTransaction();
-
-      await post.populate("author", "username fullName profilePicture");
-
-      // Socket: Notify followers about new post
-      try {
-        const io = getIO();
-        const user = await User.findById(authorId).select("followers");
-        if (user && user.followers.length > 0) {
-          const postObject = post.toObject();
-          for (const followerId of user.followers) {
-            io.to(`user:${followerId.toString()}`).emit("new-post", {
-              authorId,
-              post: postObject,
-            });
-          }
+      const io = getIO();
+      const user = await User.findById(authorId).select("followers");
+      if (user && user.followers.length > 0) {
+        const postObject = post.toObject();
+        for (const followerId of user.followers) {
+          io.to(`user:${followerId.toString()}`).emit("new-post", {
+            authorId,
+            post: postObject,
+          });
         }
-      } catch (socketError) {
-        logger.error(socketError, "Failed to emit new-post socket event");
       }
-
-      logger.info({ postId: post._id, authorId }, "New post created");
-
-      return post;
-    } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
-      session.endSession();
+    } catch (socketError) {
+      logger.error(socketError, "Failed to emit new-post socket event");
     }
+
+    logger.info({ postId: post._id, authorId }, "New post created");
+
+    return post;
   }
 
   static async getPostById(postId: string, userId?: string): Promise<any> {
@@ -82,6 +69,15 @@ export class PostService {
 
     const postObject = post.toObject();
 
+    // Get comment count from standalone Comment collection
+    const commentCount = await Comment.countDocuments({
+      post: new Types.ObjectId(postId),
+      parentComment: null,
+    });
+
+    (postObject as any).commentCount = commentCount;
+    (postObject as any).comments = [];
+
     if (userId) {
       (postObject as any).isLikedByCurrentUser = post.likes.some(
         (like: any) => like._id.toString() === userId,
@@ -92,68 +88,63 @@ export class PostService {
   }
 
   static async deletePost(postId: string, userId: string): Promise<void> {
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
-    try {
-      const post = await Post.findById(postId);
-      if (!post) {
-        throw ApiError.notFound("Post not found");
-      }
-
-      if (post.author.toString() !== userId) {
-        throw ApiError.forbidden("You can only delete your own posts");
-      }
-
-      await User.findByIdAndUpdate(
-        userId,
-        { $pull: { posts: new mongoose.Types.ObjectId(postId) } },
-        { session },
-      );
-
-      await Post.findByIdAndDelete(postId, { session });
-
-      await session.commitTransaction();
-
-      logger.info({ postId, userId }, "Post deleted");
-    } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
-      session.endSession();
-    }
-  }
-
-  static async likePost(postId: string, userId: string): Promise<void> {
     const post = await Post.findById(postId);
     if (!post) {
       throw ApiError.notFound("Post not found");
     }
 
-    if (post.likes.some((like) => like.toString() === userId)) {
-      throw ApiError.badRequest("Post already liked");
+    if (post.author.toString() !== userId) {
+      throw ApiError.forbidden("You can only delete your own posts");
     }
 
-    await Post.findByIdAndUpdate(postId, {
-      $addToSet: { likes: new mongoose.Types.ObjectId(userId) },
+    // Delete all standalone comments for this post
+    await Comment.deleteMany({ post: new Types.ObjectId(postId) });
+
+    await User.findByIdAndUpdate(userId, {
+      $pull: { posts: new mongoose.Types.ObjectId(postId) },
     });
 
-    // Socket: Notify post author about like
-    try {
-      const io = getIO();
-      const postAuthorId = post.author.toString();
-      if (postAuthorId !== userId) {
-        io.to(`user:${postAuthorId}`).emit("post-liked", {
-          likerId: userId,
-          postId,
-        });
-      }
-    } catch (socketError) {
-      logger.error(socketError, "Failed to emit post-liked socket event");
-    }
+    await Post.findByIdAndDelete(postId);
 
-    logger.info({ postId, userId }, "Post liked");
+    logger.info({ postId, userId }, "Post deleted");
   }
+
+  static async likePost(postId: string, userId: string): Promise<void> {
+  const post = await Post.findById(postId);
+  if (!post) {
+    throw ApiError.notFound("Post not found");
+  }
+
+  if (post.likes.some((like) => like.toString() === userId)) {
+    throw ApiError.badRequest("Post already liked");
+  }
+
+  await Post.findByIdAndUpdate(postId, {
+    $addToSet: { likes: new mongoose.Types.ObjectId(userId) },
+  });
+
+  // Create notification for post author
+  await NotificationService.createLikeNotification(
+    post.author.toString(),
+    userId,
+    postId,
+  );
+
+  try {
+    const io = getIO();
+    const postAuthorId = post.author.toString();
+    if (postAuthorId !== userId) {
+      io.to(`user:${postAuthorId}`).emit("post-liked", {
+        likerId: userId,
+        postId,
+      });
+    }
+  } catch (socketError) {
+    logger.error(socketError, "Failed to emit post-liked socket event");
+  }
+
+  logger.info({ postId, userId }, "Post liked");
+}
 
   static async unlikePost(postId: string, userId: string): Promise<void> {
     const post = await Post.findById(postId);
@@ -169,50 +160,54 @@ export class PostService {
   }
 
   static async addComment(
-    postId: string,
-    userId: string,
-    text: string,
-  ): Promise<IComment> {
-    const post = await Post.findById(postId);
-    if (!post) {
-      throw ApiError.notFound("Post not found");
-    }
-
-    const comment: IComment = {
-      user: new mongoose.Types.ObjectId(userId) as any,
-      text,
-      createdAt: new Date(),
-    };
-
-    post.comments.push(comment);
-    await post.save();
-
-    await post.populate("comments.user", "username fullName profilePicture");
-
-    const addedComment = post.comments[post.comments.length - 1];
-    if (!addedComment) {
-      throw new Error("Failed to add comment");
-    }
-
-    // Socket: Notify post author about comment
-    try {
-      const io = getIO();
-      const postAuthorId = post.author.toString();
-      if (postAuthorId !== userId) {
-        io.to(`user:${postAuthorId}`).emit("post-commented", {
-          commenterId: userId,
-          postId,
-          commentId: (addedComment as any)._id?.toString(),
-        });
-      }
-    } catch (socketError) {
-      logger.error(socketError, "Failed to emit post-commented socket event");
-    }
-
-    logger.info({ postId, userId }, "Comment added to post");
-
-    return addedComment;
+  postId: string,
+  userId: string,
+  text: string,
+): Promise<any> {
+  const post = await Post.findById(postId);
+  if (!post) {
+    throw ApiError.notFound("Post not found");
   }
+
+  const comment = await Comment.create({
+    text,
+    author: new Types.ObjectId(userId),
+    post: new Types.ObjectId(postId),
+    likes: [],
+    isEdited: false,
+  });
+
+  await comment.populate("author", "username fullName profilePicture");
+
+  // Create notification for post author
+  await NotificationService.createCommentNotification(
+    post.author.toString(),
+    userId,
+    postId,
+    comment._id.toString(),
+  );
+
+  try {
+    const io = getIO();
+    const postAuthorId = post.author.toString();
+    if (postAuthorId !== userId) {
+      io.to(`user:${postAuthorId}`).emit("post-commented", {
+        commenterId: userId,
+        postId,
+        commentId: comment._id.toString(),
+      });
+    }
+  } catch (socketError) {
+    logger.error(socketError, "Failed to emit post-commented socket event");
+  }
+
+  logger.info(
+    { commentId: comment._id, postId, userId },
+    "Comment added to post",
+  );
+
+  return comment;
+}
 
   static async deleteComment(
     postId: string,
@@ -224,20 +219,20 @@ export class PostService {
       throw ApiError.notFound("Post not found");
     }
 
-    const comment = (post.comments as any).id(commentId);
+    const comment = await Comment.findById(commentId);
     if (!comment) {
       throw ApiError.notFound("Comment not found");
     }
 
     if (
-      comment.user.toString() !== userId &&
+      comment.author.toString() !== userId &&
       post.author.toString() !== userId
     ) {
       throw ApiError.forbidden("You can only delete your own comments");
     }
 
-    comment.deleteOne();
-    await post.save();
+    await Comment.deleteMany({ parentComment: comment._id });
+    await comment.deleteOne();
 
     logger.info({ postId, commentId, userId }, "Comment deleted from post");
   }

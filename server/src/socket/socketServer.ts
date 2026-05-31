@@ -23,7 +23,7 @@ export const initializeSocket = async (
   // Authentication middleware
   io.use(async (socket: Socket, next) => {
     try {
-      const token = socket.handshake.auth.token;
+      const token = socket.handshake.auth.token || socket.handshake.query.token;
 
       if (!token || typeof token !== "string") {
         return next(new Error("Authentication required"));

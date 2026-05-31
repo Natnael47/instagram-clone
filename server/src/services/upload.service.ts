@@ -5,17 +5,7 @@ import fs from "fs";
 import path from "path";
 import sharp from "sharp";
 
-/**
- * Upload Service
- * Handles image upload, processing, and storage (Cloudinary or local)
- */
 export class UploadService {
-  /**
-   * Upload a single image
-   * @param file - Express Multer file object
-   * @param folder - Optional folder name in Cloudinary
-   * @returns Image URL
-   */
   static async uploadImage(
     file: Express.Multer.File,
     folder: string = "posts",
@@ -24,7 +14,6 @@ export class UploadService {
       throw ApiError.badRequest("No file provided");
     }
 
-    // Check if Cloudinary is configured
     if (isCloudinaryConfigured()) {
       return await this.uploadToCloudinary(file, folder);
     } else {
@@ -32,12 +21,6 @@ export class UploadService {
     }
   }
 
-  /**
-   * Upload multiple images
-   * @param files - Array of Express Multer file objects
-   * @param folder - Optional folder name in Cloudinary
-   * @returns Array of image URLs
-   */
   static async uploadMultipleImages(
     files: Express.Multer.File[],
     folder: string = "posts",
@@ -47,16 +30,24 @@ export class UploadService {
     }
 
     const uploadPromises = files.map((file) => this.uploadImage(file, folder));
-
     return await Promise.all(uploadPromises);
   }
 
   /**
-   * Upload image to Cloudinary
-   * @param file - Express Multer file object
-   * @param folder - Folder name in Cloudinary
-   * @returns Cloudinary image URL
+   * Get file buffer regardless of storage type (memory or disk)
    */
+  private static getFileBuffer(file: Express.Multer.File): Buffer {
+    if (file.buffer) {
+      return file.buffer;
+    }
+
+    if (file.path) {
+      return fs.readFileSync(file.path);
+    }
+
+    throw new Error("No file data available");
+  }
+
   private static async uploadToCloudinary(
     file: Express.Multer.File,
     folder: string,
@@ -67,10 +58,14 @@ export class UploadService {
         throw new Error("Cloudinary not configured");
       }
 
-      // Compress image before upload
-      const compressedBuffer = await this.compressImage(file.buffer);
+      const fileBuffer = this.getFileBuffer(file);
 
-      // Upload to Cloudinary
+      if (!fileBuffer || fileBuffer.length === 0) {
+        throw new Error("No file data available");
+      }
+
+      const compressedBuffer = await this.compressImage(fileBuffer);
+
       const result = await new Promise<any>((resolve, reject) => {
         const uploadStream = cloudinary.uploader.upload_stream(
           {
@@ -98,29 +93,12 @@ export class UploadService {
     }
   }
 
-  /**
-   * Save image to local storage
-   * @param file - Express Multer file object
-   * @returns Local image URL
-   */
   private static async saveToLocal(file: Express.Multer.File): Promise<string> {
     try {
-      // Compress image
-      const compressedBuffer = await this.compressImage(file.buffer);
-
-      // Generate unique filename
-      const timestamp = Date.now();
-      const random = Math.round(Math.random() * 1e9);
-      const ext = path.extname(file.originalname);
-      const filename = `${timestamp}-${random}${ext}`;
-      const filepath = path.join(process.cwd(), "uploads", filename);
-
-      // Save compressed image
-      fs.writeFileSync(filepath, compressedBuffer);
-
+      // File is already saved to disk by Multer, just return the URL
+      const filename = file.filename || path.basename(file.path);
       const url = `/uploads/${filename}`;
       logger.info({ filename, url }, "Image saved locally");
-
       return url;
     } catch (error) {
       logger.error({ error }, "Failed to save image locally");
@@ -128,13 +106,13 @@ export class UploadService {
     }
   }
 
-  /**
-   * Compress image using Sharp
-   * @param buffer - Image buffer
-   * @returns Compressed image buffer
-   */
   private static async compressImage(buffer: Buffer): Promise<Buffer> {
     try {
+      if (!buffer || buffer.length === 0) {
+        logger.warn("Empty buffer received, returning original");
+        return buffer;
+      }
+
       const compressed = await sharp(buffer)
         .resize(1200, 1200, {
           fit: "inside",
@@ -145,33 +123,26 @@ export class UploadService {
 
       return compressed;
     } catch (error) {
-      logger.error({ error }, "Failed to compress image");
-      // Return original buffer if compression fails
+      logger.error(
+        { error },
+        "Failed to compress image, using original buffer",
+      );
       return buffer;
     }
   }
 
-  /**
-   * Delete an image from Cloudinary
-   * @param url - Image URL
-   */
   static async deleteImage(url: string): Promise<void> {
     if (!url) return;
 
-    // Only delete from Cloudinary if it's a Cloudinary URL
     if (url.includes("cloudinary.com") && isCloudinaryConfigured()) {
       try {
         const cloudinary = getCloudinary();
         if (!cloudinary) return;
 
-        // Extract public ID from URL safely
         const parts = url.split("/");
-
-        // Use .at() for safer array access (returns undefined if index doesn't exist)
         const filename = parts.at(-1);
         const folder = parts.at(-2);
 
-        // Check if we successfully extracted filename and folder
         if (!filename || !folder) {
           logger.warn(
             { url },
@@ -180,7 +151,6 @@ export class UploadService {
           return;
         }
 
-        // Extract public ID without extension using path.parse
         const publicId = path.parse(filename).name;
         const fullPublicId = `instagram-clone/${folder}/${publicId}`;
 
@@ -193,7 +163,6 @@ export class UploadService {
         logger.error({ error, url }, "Failed to delete image from Cloudinary");
       }
     } else if (url.startsWith("/uploads/")) {
-      // Delete local file
       const filepath = path.join(process.cwd(), url);
       if (fs.existsSync(filepath)) {
         fs.unlinkSync(filepath);
@@ -202,22 +171,12 @@ export class UploadService {
     }
   }
 
-  /**
-   * Upload profile picture
-   * @param file - Express Multer file object
-   * @returns Profile picture URL
-   */
   static async uploadProfilePicture(
     file: Express.Multer.File,
   ): Promise<string> {
     return await this.uploadImage(file, "profiles");
   }
 
-  /**
-   * Upload story image
-   * @param file - Express Multer file object
-   * @returns Story image URL
-   */
   static async uploadStory(file: Express.Multer.File): Promise<string> {
     return await this.uploadImage(file, "stories");
   }
