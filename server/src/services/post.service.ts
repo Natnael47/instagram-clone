@@ -1,10 +1,10 @@
 import { Comment } from "@models/Comment";
 import { Post, type PostDocument } from "@models/Post";
 import { User } from "@models/User";
+import { NotificationService } from "@services/notification.service";
 import { getIO } from "@socket/index";
 import { ApiError } from "@utils/ApiError";
 import { logger } from "@utils/logger";
-import { NotificationService } from "@services/notification.service";
 import {
   formatPaginatedResult,
   parsePaginationParams,
@@ -110,41 +110,40 @@ export class PostService {
   }
 
   static async likePost(postId: string, userId: string): Promise<void> {
-  const post = await Post.findById(postId);
-  if (!post) {
-    throw ApiError.notFound("Post not found");
-  }
-
-  if (post.likes.some((like) => like.toString() === userId)) {
-    throw ApiError.badRequest("Post already liked");
-  }
-
-  await Post.findByIdAndUpdate(postId, {
-    $addToSet: { likes: new mongoose.Types.ObjectId(userId) },
-  });
-
-  // Create notification for post author
-  await NotificationService.createLikeNotification(
-    post.author.toString(),
-    userId,
-    postId,
-  );
-
-  try {
-    const io = getIO();
-    const postAuthorId = post.author.toString();
-    if (postAuthorId !== userId) {
-      io.to(`user:${postAuthorId}`).emit("post-liked", {
-        likerId: userId,
-        postId,
-      });
+    const post = await Post.findById(postId);
+    if (!post) {
+      throw ApiError.notFound("Post not found");
     }
-  } catch (socketError) {
-    logger.error(socketError, "Failed to emit post-liked socket event");
-  }
 
-  logger.info({ postId, userId }, "Post liked");
-}
+    if (post.likes.some((like) => like.toString() === userId)) {
+      throw ApiError.badRequest("Post already liked");
+    }
+
+    await Post.findByIdAndUpdate(postId, {
+      $addToSet: { likes: new mongoose.Types.ObjectId(userId) },
+    });
+
+    await NotificationService.createLikeNotification(
+      post.author._id.toString(),
+      userId,
+      postId,
+    );
+
+    try {
+      const io = getIO();
+      const postAuthorId = post.author.toString();
+      if (postAuthorId !== userId) {
+        io.to(`user:${postAuthorId}`).emit("post-liked", {
+          likerId: userId,
+          postId,
+        });
+      }
+    } catch (socketError) {
+      logger.error(socketError, "Failed to emit post-liked socket event");
+    }
+
+    logger.info({ postId, userId }, "Post liked");
+  }
 
   static async unlikePost(postId: string, userId: string): Promise<void> {
     const post = await Post.findById(postId);
@@ -160,54 +159,53 @@ export class PostService {
   }
 
   static async addComment(
-  postId: string,
-  userId: string,
-  text: string,
-): Promise<any> {
-  const post = await Post.findById(postId);
-  if (!post) {
-    throw ApiError.notFound("Post not found");
-  }
-
-  const comment = await Comment.create({
-    text,
-    author: new Types.ObjectId(userId),
-    post: new Types.ObjectId(postId),
-    likes: [],
-    isEdited: false,
-  });
-
-  await comment.populate("author", "username fullName profilePicture");
-
-  // Create notification for post author
-  await NotificationService.createCommentNotification(
-    post.author.toString(),
-    userId,
-    postId,
-    comment._id.toString(),
-  );
-
-  try {
-    const io = getIO();
-    const postAuthorId = post.author.toString();
-    if (postAuthorId !== userId) {
-      io.to(`user:${postAuthorId}`).emit("post-commented", {
-        commenterId: userId,
-        postId,
-        commentId: comment._id.toString(),
-      });
+    postId: string,
+    userId: string,
+    text: string,
+  ): Promise<any> {
+    const post = await Post.findById(postId);
+    if (!post) {
+      throw ApiError.notFound("Post not found");
     }
-  } catch (socketError) {
-    logger.error(socketError, "Failed to emit post-commented socket event");
+
+    const comment = await Comment.create({
+      text,
+      author: new Types.ObjectId(userId),
+      post: new Types.ObjectId(postId),
+      likes: [],
+      isEdited: false,
+    });
+
+    await comment.populate("author", "username fullName profilePicture");
+
+    await NotificationService.createCommentNotification(
+      post.author._id.toString(),
+      userId,
+      postId,
+      comment._id.toString(),
+    );
+
+    try {
+      const io = getIO();
+      const postAuthorId = post.author.toString();
+      if (postAuthorId !== userId) {
+        io.to(`user:${postAuthorId}`).emit("post-commented", {
+          commenterId: userId,
+          postId,
+          commentId: comment._id.toString(),
+        });
+      }
+    } catch (socketError) {
+      logger.error(socketError, "Failed to emit post-commented socket event");
+    }
+
+    logger.info(
+      { commentId: comment._id, postId, userId },
+      "Comment added to post",
+    );
+
+    return comment;
   }
-
-  logger.info(
-    { commentId: comment._id, postId, userId },
-    "Comment added to post",
-  );
-
-  return comment;
-}
 
   static async deleteComment(
     postId: string,
