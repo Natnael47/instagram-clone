@@ -1,6 +1,7 @@
 import { Story, type StoryDocument } from "@models/Story";
 import { User } from "@models/User";
 import { UploadService } from "@services/upload.service";
+import { getIO } from "@socket/index";
 import { ApiError } from "@utils/ApiError";
 import { logger } from "@utils/logger";
 import mongoose, { Types } from "mongoose";
@@ -40,6 +41,23 @@ export class StoryService {
 
       await story.populate("author", "username fullName profilePicture");
 
+      // Socket: Notify followers about new story
+      try {
+        const io = getIO();
+        const user = await User.findById(userId).select("followers");
+        if (user && user.followers.length > 0) {
+          const storyObject = story.toObject();
+          for (const followerId of user.followers) {
+            io.to(`user:${followerId.toString()}`).emit("new-story", {
+              authorId: userId,
+              story: storyObject,
+            });
+          }
+        }
+      } catch (socketError) {
+        logger.error(socketError, "Failed to emit new-story socket event");
+      }
+
       logger.info({ storyId: story._id, userId }, "New story created");
 
       return story;
@@ -51,6 +69,7 @@ export class StoryService {
     }
   }
 
+  // Rest of the class remains unchanged...
   static async getFollowedStories(userId: string): Promise<any[]> {
     const currentUser = await User.findById(userId);
     if (!currentUser) {

@@ -1,6 +1,7 @@
 import { Conversation, type ConversationDocument } from "@models/Conversation";
 import { Message, type MessageDocument } from "@models/Message";
 import { User } from "@models/User";
+import { getIO } from "@socket/index";
 import { ApiError } from "@utils/ApiError";
 import { logger } from "@utils/logger";
 import {
@@ -39,6 +40,32 @@ export class MessageService {
     await conversation.save();
 
     await message.populate("sender", "username fullName profilePicture");
+
+    // Socket: Emit new message to conversation room and all participants
+    try {
+      const io = getIO();
+      const messageObject = message.toObject();
+      const conversationIdStr = conversation._id.toString();
+
+      // Emit to the conversation room
+      io.to(`conversation:${conversationIdStr}`).emit("new-message", {
+        conversationId: conversationIdStr,
+        message: messageObject,
+      });
+
+      // Also emit to individual participant rooms for notification badges
+      for (const participant of conversation.participants) {
+        const participantId = participant.toString();
+        if (participantId !== senderId) {
+          io.to(`user:${participantId}`).emit("new-message", {
+            conversationId: conversationIdStr,
+            message: messageObject,
+          });
+        }
+      }
+    } catch (socketError) {
+      logger.error(socketError, "Failed to emit new-message socket event");
+    }
 
     logger.info(
       { messageId: message._id, conversationId, senderId },
@@ -90,6 +117,31 @@ export class MessageService {
     await conversation.save();
 
     await message.populate("sender", "username fullName profilePicture");
+
+    // Socket: Emit new message to both sender and recipient
+    try {
+      const io = getIO();
+      const messageObject = message.toObject();
+      const conversationIdStr = conversation._id.toString();
+
+      // Emit to conversation room
+      io.to(`conversation:${conversationIdStr}`).emit("new-message", {
+        conversationId: conversationIdStr,
+        message: messageObject,
+      });
+
+      // Emit to both users' personal rooms
+      io.to(`user:${senderId}`).emit("new-message", {
+        conversationId: conversationIdStr,
+        message: messageObject,
+      });
+      io.to(`user:${recipientId}`).emit("new-message", {
+        conversationId: conversationIdStr,
+        message: messageObject,
+      });
+    } catch (socketError) {
+      logger.error(socketError, "Failed to emit new-message socket event");
+    }
 
     logger.info(
       {
@@ -235,6 +287,18 @@ export class MessageService {
     message.isRead = true;
     message.readAt = new Date();
     await message.save();
+
+    // Socket: Notify conversation that message was read
+    try {
+      const io = getIO();
+      const conversationIdStr = conversation._id.toString();
+      io.to(`conversation:${conversationIdStr}`).emit("message-read", {
+        conversationId: conversationIdStr,
+        messageId,
+      });
+    } catch (socketError) {
+      logger.error(socketError, "Failed to emit message-read socket event");
+    }
 
     logger.info({ messageId, userId }, "Message marked as read");
   }

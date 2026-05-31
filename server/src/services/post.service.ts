@@ -1,5 +1,6 @@
 import { Post, type IComment, type PostDocument } from "@models/Post";
 import { User } from "@models/User";
+import { getIO } from "@socket/index";
 import { ApiError } from "@utils/ApiError";
 import { logger } from "@utils/logger";
 import {
@@ -8,18 +9,7 @@ import {
 } from "@utils/pagination";
 import mongoose from "mongoose";
 
-/**
- * Post Service
- * Handles post creation, retrieval, deletion, and likes
- */
 export class PostService {
-  /**
-   * Create a new post
-   * @param authorId - ID of post author
-   * @param imageUrl - URL of uploaded image
-   * @param caption - Post caption
-   * @returns Created post
-   */
   static async createPost(
     authorId: string,
     imageUrl: string,
@@ -33,7 +23,6 @@ export class PostService {
     session.startTransaction();
 
     try {
-      // Create post using new Post() instead of Post.create()
       const post = new Post({
         author: new mongoose.Types.ObjectId(authorId),
         imageUrl,
@@ -44,7 +33,6 @@ export class PostService {
 
       await post.save({ session });
 
-      // Add post to user's posts array
       await User.findByIdAndUpdate(
         authorId,
         { $push: { posts: post._id } },
@@ -53,8 +41,24 @@ export class PostService {
 
       await session.commitTransaction();
 
-      // Populate author details
       await post.populate("author", "username fullName profilePicture");
+
+      // Socket: Notify followers about new post
+      try {
+        const io = getIO();
+        const user = await User.findById(authorId).select("followers");
+        if (user && user.followers.length > 0) {
+          const postObject = post.toObject();
+          for (const followerId of user.followers) {
+            io.to(`user:${followerId.toString()}`).emit("new-post", {
+              authorId,
+              post: postObject,
+            });
+          }
+        }
+      } catch (socketError) {
+        logger.error(socketError, "Failed to emit new-post socket event");
+      }
 
       logger.info({ postId: post._id, authorId }, "New post created");
 
@@ -67,11 +71,6 @@ export class PostService {
     }
   }
 
-  /**
-   * Get a single post by ID
-   * @param postId - Post ID
-   * @returns Post with populated author and like status
-   */
   static async getPostById(postId: string, userId?: string): Promise<any> {
     const post = await Post.findById(postId)
       .populate("author", "username fullName profilePicture")
@@ -83,7 +82,6 @@ export class PostService {
 
     const postObject = post.toObject();
 
-    // Add like status for current user
     if (userId) {
       (postObject as any).isLikedByCurrentUser = post.likes.some(
         (like: any) => like._id.toString() === userId,
@@ -93,11 +91,6 @@ export class PostService {
     return postObject;
   }
 
-  /**
-   * Delete a post
-   * @param postId - Post ID
-   * @param userId - ID of user attempting to delete
-   */
   static async deletePost(postId: string, userId: string): Promise<void> {
     const session = await mongoose.startSession();
     session.startTransaction();
@@ -108,19 +101,16 @@ export class PostService {
         throw ApiError.notFound("Post not found");
       }
 
-      // Check ownership
       if (post.author.toString() !== userId) {
         throw ApiError.forbidden("You can only delete your own posts");
       }
 
-      // Remove post from user's posts array
       await User.findByIdAndUpdate(
         userId,
         { $pull: { posts: new mongoose.Types.ObjectId(postId) } },
         { session },
       );
 
-      // Delete post
       await Post.findByIdAndDelete(postId, { session });
 
       await session.commitTransaction();
@@ -134,18 +124,12 @@ export class PostService {
     }
   }
 
-  /**
-   * Like a post
-   * @param postId - Post ID
-   * @param userId - ID of user liking the post
-   */
   static async likePost(postId: string, userId: string): Promise<void> {
     const post = await Post.findById(postId);
     if (!post) {
       throw ApiError.notFound("Post not found");
     }
 
-    // Check if already liked
     if (post.likes.some((like) => like.toString() === userId)) {
       throw ApiError.badRequest("Post already liked");
     }
@@ -154,14 +138,23 @@ export class PostService {
       $addToSet: { likes: new mongoose.Types.ObjectId(userId) },
     });
 
+    // Socket: Notify post author about like
+    try {
+      const io = getIO();
+      const postAuthorId = post.author.toString();
+      if (postAuthorId !== userId) {
+        io.to(`user:${postAuthorId}`).emit("post-liked", {
+          likerId: userId,
+          postId,
+        });
+      }
+    } catch (socketError) {
+      logger.error(socketError, "Failed to emit post-liked socket event");
+    }
+
     logger.info({ postId, userId }, "Post liked");
   }
 
-  /**
-   * Unlike a post
-   * @param postId - Post ID
-   * @param userId - ID of user unliking the post
-   */
   static async unlikePost(postId: string, userId: string): Promise<void> {
     const post = await Post.findById(postId);
     if (!post) {
@@ -175,13 +168,6 @@ export class PostService {
     logger.info({ postId, userId }, "Post unliked");
   }
 
-  /**
-   * Add a comment to a post
-   * @param postId - Post ID
-   * @param userId - ID of user commenting
-   * @param text - Comment text
-   * @returns Created comment
-   */
   static async addComment(
     postId: string,
     userId: string,
@@ -192,7 +178,6 @@ export class PostService {
       throw ApiError.notFound("Post not found");
     }
 
-    // Create comment object with proper ObjectId
     const comment: IComment = {
       user: new mongoose.Types.ObjectId(userId) as any,
       text,
@@ -204,22 +189,31 @@ export class PostService {
 
     await post.populate("comments.user", "username fullName profilePicture");
 
-    logger.info({ postId, userId }, "Comment added to post");
-
-    // Return the newly added comment
     const addedComment = post.comments[post.comments.length - 1];
     if (!addedComment) {
       throw new Error("Failed to add comment");
     }
+
+    // Socket: Notify post author about comment
+    try {
+      const io = getIO();
+      const postAuthorId = post.author.toString();
+      if (postAuthorId !== userId) {
+        io.to(`user:${postAuthorId}`).emit("post-commented", {
+          commenterId: userId,
+          postId,
+          commentId: (addedComment as any)._id?.toString(),
+        });
+      }
+    } catch (socketError) {
+      logger.error(socketError, "Failed to emit post-commented socket event");
+    }
+
+    logger.info({ postId, userId }, "Comment added to post");
+
     return addedComment;
   }
 
-  /**
-   * Delete a comment from a post
-   * @param postId - Post ID
-   * @param commentId - Comment ID
-   * @param userId - ID of user attempting to delete
-   */
   static async deleteComment(
     postId: string,
     commentId: string,
@@ -230,13 +224,11 @@ export class PostService {
       throw ApiError.notFound("Post not found");
     }
 
-    // Find the comment using mongoose subdocument id method with type assertion
     const comment = (post.comments as any).id(commentId);
     if (!comment) {
       throw ApiError.notFound("Comment not found");
     }
 
-    // Check if user is comment author or post owner
     if (
       comment.user.toString() !== userId &&
       post.author.toString() !== userId
@@ -244,20 +236,12 @@ export class PostService {
       throw ApiError.forbidden("You can only delete your own comments");
     }
 
-    // Remove comment using deleteOne method
     comment.deleteOne();
     await post.save();
 
     logger.info({ postId, commentId, userId }, "Comment deleted from post");
   }
 
-  /**
-   * Get user's posts
-   * @param userId - User ID
-   * @param page - Page number
-   * @param limit - Items per page
-   * @returns Paginated user posts
-   */
   static async getUserPosts(
     userId: string,
     page?: string | number,
@@ -281,13 +265,6 @@ export class PostService {
     return formatPaginatedResult(posts, pageNum, limitNum, total);
   }
 
-  /**
-   * Update post caption
-   * @param postId - Post ID
-   * @param userId - ID of user attempting to update
-   * @param caption - New caption
-   * @returns Updated post
-   */
   static async updatePostCaption(
     postId: string,
     userId: string,
@@ -298,7 +275,6 @@ export class PostService {
       throw ApiError.notFound("Post not found");
     }
 
-    // Check ownership
     if (post.author.toString() !== userId) {
       throw ApiError.forbidden("You can only edit your own posts");
     }
@@ -313,13 +289,6 @@ export class PostService {
     return post;
   }
 
-  /**
-   * Get personalized feed for a user (posts from followed users)
-   * @param userId - Current user ID
-   * @param page - Page number
-   * @param limit - Items per page
-   * @returns Paginated feed posts
-   */
   static async getPersonalizedFeed(
     userId: string,
     page?: string | number,

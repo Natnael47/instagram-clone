@@ -1,5 +1,6 @@
 import { Comment, type CommentDocument } from "@models/Comment";
 import { Post } from "@models/Post";
+import { getIO } from "@socket/index";
 import { ApiError } from "@utils/ApiError";
 import { logger } from "@utils/logger";
 import {
@@ -163,6 +164,29 @@ export class CommentService {
 
     comment.likes.push(userObjectId);
     await comment.save();
+
+    // Socket: Notify comment author about like
+    try {
+      const commentAuthorId = comment.author.toString();
+      if (commentAuthorId !== userId) {
+        const io = getIO();
+        io.to(`user:${commentAuthorId}`).emit("new-notification", {
+          notification: {
+            _id: comment._id,
+            type: "comment_like",
+            message: "Someone liked your comment",
+            sender: {
+              _id: userId,
+              username: "",
+              fullName: "",
+            },
+            createdAt: new Date(),
+          },
+        });
+      }
+    } catch (socketError) {
+      logger.error(socketError, "Failed to emit comment-like socket event");
+    }
 
     logger.info({ commentId, userId }, "Comment liked");
   }
