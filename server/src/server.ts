@@ -1,5 +1,6 @@
 import { connectDB } from "@config/database";
 import { env } from "@config/env";
+import { setupSocket } from "@socket/index";
 import { logger } from "@utils/logger";
 import http from "http";
 import app from "./app";
@@ -10,12 +11,17 @@ const startServer = async (): Promise<void> => {
 
     const server = http.createServer(app);
 
+    // Initialize Socket.IO
+    await setupSocket(server);
+    logger.info("Socket.IO initialized");
+
     server.listen(env.PORT, () => {
       logger.info(
         `Server running in ${env.NODE_ENV} mode
 Port: ${env.PORT}
 URL: http://localhost:${env.PORT}
-Health: http://localhost:${env.PORT}/health`,
+Health: http://localhost:${env.PORT}/health
+WebSocket: ws://localhost:${env.PORT}`,
       );
     });
 
