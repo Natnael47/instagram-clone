@@ -1,23 +1,17 @@
-import { Schema, model, type Document } from "mongoose";
+import { model, Schema, Types, type Document } from "mongoose";
 import type { UserDocument } from "./User";
 
-/**
- * Interface for comment subdocument
- */
 export interface IComment {
-  user: Schema.Types.ObjectId | UserDocument;
+  user: Types.ObjectId | UserDocument;
   text: string;
   createdAt: Date;
 }
 
-/**
- * Interface for Post document
- */
 export interface IPost {
   imageUrl: string;
   caption?: string;
-  author: Schema.Types.ObjectId | UserDocument;
-  likes: Schema.Types.ObjectId[] | UserDocument[];
+  author: Types.ObjectId | UserDocument;
+  likes: (Types.ObjectId | UserDocument)[];
   comments: IComment[];
   createdAt: Date;
   updatedAt: Date;
@@ -25,7 +19,6 @@ export interface IPost {
 
 export interface PostDocument extends Document, IPost {}
 
-// Comment subdocument schema
 const commentSchema = new Schema<IComment>({
   user: {
     type: Schema.Types.ObjectId,
@@ -75,7 +68,6 @@ const postSchema = new Schema<PostDocument>(
   },
 );
 
-// Virtuals for computed counts
 postSchema.virtual("likeCount").get(function (this: PostDocument) {
   return this.likes.length;
 });
@@ -84,12 +76,10 @@ postSchema.virtual("commentCount").get(function (this: PostDocument) {
   return this.comments.length;
 });
 
-// Indexes for efficient queries
 postSchema.index({ author: 1, createdAt: -1 });
 postSchema.index({ createdAt: -1 });
 postSchema.index({ likes: 1 });
 
-// Populate author by default
 postSchema.pre("find", function () {
   this.populate("author", "username fullName profilePicture");
 });

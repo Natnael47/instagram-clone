@@ -204,4 +204,26 @@ export class PostController {
         );
     },
   );
+
+    /**
+   * Get personalized feed for the authenticated user
+   * GET /api/v1/posts/feed
+   */
+  static getPersonalizedFeed = asyncHandler(async (req: Request, res: Response) => {
+    const userId = req.user?._id.toString();
+    if (!userId) {
+      throw new Error("User not authenticated");
+    }
+
+    const page = req.query.page as string;
+    const limit = req.query.limit as string;
+
+    const result = await PostService.getPersonalizedFeed(userId, page, limit);
+
+    logger.info({ userId, page, limit }, "Personalized feed retrieved");
+
+    res
+      .status(200)
+      .json(ApiResponse.success("Feed retrieved successfully", result));
+  });
 }

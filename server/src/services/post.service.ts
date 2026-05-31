@@ -312,4 +312,53 @@ export class PostService {
 
     return post;
   }
+
+  /**
+   * Get personalized feed for a user (posts from followed users)
+   * @param userId - Current user ID
+   * @param page - Page number
+   * @param limit - Items per page
+   * @returns Paginated feed posts
+   */
+  static async getPersonalizedFeed(
+    userId: string,
+    page?: string | number,
+    limit?: string | number,
+  ) {
+    const user = await User.findById(userId);
+    if (!user) {
+      throw ApiError.notFound("User not found");
+    }
+
+    const {
+      page: pageNum,
+      limit: limitNum,
+      skip,
+    } = parsePaginationParams(page, limit);
+
+    const followingIds = user.following.map((id) => id.toString());
+
+    if (followingIds.length === 0) {
+      return formatPaginatedResult([], pageNum, limitNum, 0);
+    }
+
+    const filter = {
+      author: {
+        $in: followingIds.map((id) => new mongoose.Types.ObjectId(id)),
+      },
+    };
+
+    const [posts, total] = await Promise.all([
+      Post.find(filter)
+        .populate("author", "username fullName profilePicture")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum),
+      Post.countDocuments(filter),
+    ]);
+
+    logger.info({ userId, total }, "Personalized feed retrieved");
+
+    return formatPaginatedResult(posts, pageNum, limitNum, total);
+  }
 }
