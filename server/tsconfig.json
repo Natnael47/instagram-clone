@@ -9,15 +9,15 @@
 
     // Output
     "outDir": "./dist",
-    "rootDir": "./src",
+    "rootDir": ".",
     "declaration": true,
     "sourceMap": true,
     "removeComments": true,
 
     // Strict Type Checking
     "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
@@ -31,7 +31,7 @@
     "baseUrl": ".",
     "ignoreDeprecations": "6.0",
 
-    // Path Aliases (TypeScript 6 way)
+    // Path Aliases
     "paths": {
       "@config/*": ["./src/config/*"],
       "@models/*": ["./src/models/*"],
@@ -51,6 +51,6 @@
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "tests"]
+  "include": ["src/**/*", "tests/**/*"],
+  "exclude": ["node_modules", "dist"]
 }

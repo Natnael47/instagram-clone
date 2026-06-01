@@ -1,10 +1,14 @@
+import { env } from "@config/env";
 import { ApiError } from "@utils/ApiError";
 import rateLimit from "express-rate-limit";
 
+// Check if we're in test mode
+const isTest = env.NODE_ENV === "test";
+
 // General API rate limiter
 export const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
+  windowMs: isTest ? 1000 : 15 * 60 * 1000, // 1 second in test, 15 minutes in prod
+  max: isTest ? 1000 : 100, // 1000 in test, 100 in prod
   standardHeaders: true,
   legacyHeaders: false,
   handler: (_req, _res) => {
@@ -14,8 +18,8 @@ export const apiLimiter = rateLimit({
 
 // Strict limiter for auth endpoints
 export const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // limit each IP to 10 requests per windowMs
+  windowMs: isTest ? 1000 : 15 * 60 * 1000, // 1 second in test, 15 minutes in prod
+  max: isTest ? 1000 : 10, // 1000 in test, 10 in prod
   standardHeaders: true,
   legacyHeaders: false,
   handler: (_req, _res) => {
@@ -25,8 +29,8 @@ export const authLimiter = rateLimit({
 
 // Limiter for post/comment creation
 export const createLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 30, // limit each IP to 30 creations per hour
+  windowMs: isTest ? 1000 : 60 * 60 * 1000, // 1 second in test, 1 hour in prod
+  max: isTest ? 1000 : 30, // 1000 in test, 30 in prod
   standardHeaders: true,
   legacyHeaders: false,
   handler: (_req, _res) => {
