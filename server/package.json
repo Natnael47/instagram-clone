@@ -9,7 +9,10 @@
     "lint": "eslint src --ext .ts --fix",
     "format": "prettier --write \"src/**/*.ts\"",
     "lint:check": "eslint src --ext .ts",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "seed": "bun src/seeds/seed.ts",
+    "seed:dev": "bun --watch src/seeds/seed.ts",
+    "seed:prod": "NODE_ENV=production bun src/seeds/seed.ts"
   },
   "private": true,
   "devDependencies": {
