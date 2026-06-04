@@ -14,6 +14,10 @@ const envSchema = z.object({
   CLOUDINARY_API_SECRET: z.string().optional(),
   CLIENT_URL: z.string().default("http://localhost:19000"),
   LOG_LEVEL: z.enum(["error", "warn", "info", "debug"]).default("info"),
+
+  // Activity logging configs (optional with defaults)
+  ACTIVITY_RETENTION_DAYS: z.coerce.number().default(90),
+  ACTIVITY_CLEANUP_INTERVAL_HOURS: z.coerce.number().default(24),
 });
 
 export type EnvType = z.infer<typeof envSchema>;
