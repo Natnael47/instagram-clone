@@ -9,6 +9,7 @@ import {
   parsePaginationParams,
 } from "@utils/pagination";
 import mongoose from "mongoose";
+import { ActivityService } from "./activity.service";
 
 export class NotificationService {
   static async createLikeNotification(
@@ -47,6 +48,19 @@ export class NotificationService {
     }
 
     logger.info({ recipientId, senderId, postId }, "Like notification created");
+
+    // Log notification creation
+    ActivityService.log({
+      user: senderId,
+      action: 'like_post',
+      resource: 'notification',
+      resourceId: notification._id.toString(),
+      details: {
+        notificationType: 'like',
+        recipientId,
+        postId
+      }
+    }).catch(err => logger.error({ err }, 'Failed to log notification activity'));
   }
 
   static async createCommentNotification(
@@ -89,6 +103,20 @@ export class NotificationService {
       { recipientId, senderId, postId },
       "Comment notification created",
     );
+
+    // Log notification creation
+    ActivityService.log({
+      user: senderId,
+      action: 'create_comment',
+      resource: 'notification',
+      resourceId: notification._id.toString(),
+      details: {
+        notificationType: 'comment',
+        recipientId,
+        postId,
+        commentId
+      }
+    }).catch(err => logger.error({ err }, 'Failed to log notification activity'));
   }
 
   static async createFollowNotification(
@@ -124,6 +152,18 @@ export class NotificationService {
     }
 
     logger.info({ recipientId, senderId }, "Follow notification created");
+
+    // Log notification creation
+    ActivityService.log({
+      user: senderId,
+      action: 'follow',
+      resource: 'notification',
+      resourceId: notification._id.toString(),
+      details: {
+        notificationType: 'follow',
+        recipientId
+      }
+    }).catch(err => logger.error({ err }, 'Failed to log notification activity'));
   }
 
   static async createStoryViewNotification(
@@ -163,6 +203,19 @@ export class NotificationService {
       { recipientId, senderId, storyId },
       "Story view notification created",
     );
+
+    // Log notification creation
+    ActivityService.log({
+      user: senderId,
+      action: 'view_story',
+      resource: 'notification',
+      resourceId: notification._id.toString(),
+      details: {
+        notificationType: 'story_view',
+        recipientId,
+        storyId
+      }
+    }).catch(err => logger.error({ err }, 'Failed to log notification activity'));
   }
 
   static async getUserNotifications(
@@ -206,6 +259,19 @@ export class NotificationService {
     }
 
     if (notification.recipient.toString() !== userId) {
+      // Log unauthorized attempt
+      ActivityService.log({
+        user: userId,
+        action: 'view_post',
+        resource: 'notification',
+        resourceId: notificationId,
+        status: 'failure',
+        details: {
+          reason: 'unauthorized',
+          operation: 'mark_read'
+        }
+      }).catch(err => logger.error({ err }, 'Failed to log notification activity'));
+      
       throw ApiError.forbidden(
         "Not authorized to mark this notification as read",
       );
@@ -215,15 +281,38 @@ export class NotificationService {
     await notification.save();
 
     logger.info({ notificationId, userId }, "Notification marked as read");
+
+    // Log notification read
+    ActivityService.log({
+      user: userId,
+      action: 'view_post',
+      resource: 'notification',
+      resourceId: notificationId,
+      details: {
+        operation: 'mark_read',
+        notificationType: notification.type
+      }
+    }).catch(err => logger.error({ err }, 'Failed to log notification activity'));
   }
 
   static async markAllAsRead(userId: string): Promise<void> {
-    await Notification.updateMany(
+    const result = await Notification.updateMany(
       { recipient: new mongoose.Types.ObjectId(userId), isRead: false },
       { $set: { isRead: true } },
     );
 
-    logger.info({ userId }, "All notifications marked as read");
+    logger.info({ userId, modifiedCount: result.modifiedCount }, "All notifications marked as read");
+
+    // Log batch mark as read
+    ActivityService.log({
+      user: userId,
+      action: 'view_post',
+      resource: 'notification',
+      details: {
+        operation: 'mark_all_read',
+        count: result.modifiedCount
+      }
+    }).catch(err => logger.error({ err }, 'Failed to log notification activity'));
   }
 
   static async getUnreadCount(userId: string): Promise<number> {
@@ -245,19 +334,56 @@ export class NotificationService {
     }
 
     if (notification.recipient.toString() !== userId) {
+      // Log unauthorized delete attempt
+      ActivityService.log({
+        user: userId,
+        action: 'delete_message',
+        resource: 'notification',
+        resourceId: notificationId,
+        status: 'failure',
+        details: {
+          reason: 'unauthorized',
+          operation: 'delete'
+        }
+      }).catch(err => logger.error({ err }, 'Failed to log notification activity'));
+      
       throw ApiError.forbidden("Not authorized to delete this notification");
     }
 
+    const notificationType = notification.type;
     await notification.deleteOne();
 
     logger.info({ notificationId, userId }, "Notification deleted");
+
+    // Log notification deletion
+    ActivityService.log({
+      user: userId,
+      action: 'delete_message',
+      resource: 'notification',
+      resourceId: notificationId,
+      details: {
+        operation: 'delete',
+        notificationType
+      }
+    }).catch(err => logger.error({ err }, 'Failed to log notification activity'));
   }
 
   static async deleteAllNotifications(userId: string): Promise<void> {
-    await Notification.deleteMany({
+    const result = await Notification.deleteMany({
       recipient: new mongoose.Types.ObjectId(userId),
     });
 
-    logger.info({ userId }, "All notifications deleted");
+    logger.info({ userId, deletedCount: result.deletedCount }, "All notifications deleted");
+
+    // Log batch deletion
+    ActivityService.log({
+      user: userId,
+      action: 'delete_message',
+      resource: 'notification',
+      details: {
+        operation: 'delete_all',
+        count: result.deletedCount
+      }
+    }).catch(err => logger.error({ err }, 'Failed to log notification activity'));
   }
 }

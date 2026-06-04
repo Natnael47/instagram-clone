@@ -10,6 +10,7 @@ import {
   parsePaginationParams,
 } from "@utils/pagination";
 import mongoose, { Types } from "mongoose";
+import { ActivityService } from "./activity.service";
 
 export class PostService {
   static async createPost(
@@ -55,6 +56,19 @@ export class PostService {
 
     logger.info({ postId: post._id, authorId }, "New post created");
 
+    // Log post creation
+    ActivityService.log({
+      user: authorId,
+      action: 'create_post',
+      resource: 'post',
+      resourceId: post._id.toString(),
+      details: {
+        hasImage: true,
+        captionLength: caption?.length || 0,
+        hasCaption: !!caption
+      }
+    }).catch(err => logger.error({ err }, 'Failed to log post activity'));
+
     return post;
   }
 
@@ -84,6 +98,19 @@ export class PostService {
       );
     }
 
+    // Log post view (only if viewer is not the author)
+    if (userId && post.author._id.toString() !== userId) {
+      ActivityService.log({
+        user: userId,
+        action: 'view_post',
+        resource: 'post',
+        resourceId: postId,
+        details: {
+          authorId: post.author._id.toString()
+        }
+      }).catch(err => logger.error({ err }, 'Failed to log post view activity'));
+    }
+
     return postObject;
   }
 
@@ -94,6 +121,19 @@ export class PostService {
     }
 
     if (post.author.toString() !== userId) {
+      // Log unauthorized delete attempt
+      ActivityService.log({
+        user: userId,
+        action: 'delete_post',
+        resource: 'post',
+        resourceId: postId,
+        status: 'failure',
+        details: {
+          reason: 'unauthorized',
+          postAuthorId: post.author.toString()
+        }
+      }).catch(err => logger.error({ err }, 'Failed to log post activity'));
+      
       throw ApiError.forbidden("You can only delete your own posts");
     }
 
@@ -107,6 +147,15 @@ export class PostService {
     await Post.findByIdAndDelete(postId);
 
     logger.info({ postId, userId }, "Post deleted");
+
+    // Log successful post deletion
+    ActivityService.log({
+      user: userId,
+      action: 'delete_post',
+      resource: 'post',
+      resourceId: postId,
+      status: 'success'
+    }).catch(err => logger.error({ err }, 'Failed to log post activity'));
   }
 
   static async likePost(postId: string, userId: string): Promise<void> {
@@ -143,6 +192,17 @@ export class PostService {
     }
 
     logger.info({ postId, userId }, "Post liked");
+
+    // Log post like
+    ActivityService.log({
+      user: userId,
+      action: 'like_post',
+      resource: 'post',
+      resourceId: postId,
+      details: {
+        postAuthorId: post.author.toString()
+      }
+    }).catch(err => logger.error({ err }, 'Failed to log post activity'));
   }
 
   static async unlikePost(postId: string, userId: string): Promise<void> {
@@ -151,11 +211,26 @@ export class PostService {
       throw ApiError.notFound("Post not found");
     }
 
+    const wasLiked = post.likes.some((like) => like.toString() === userId);
+
     await Post.findByIdAndUpdate(postId, {
       $pull: { likes: new mongoose.Types.ObjectId(userId) },
     });
 
     logger.info({ postId, userId }, "Post unliked");
+
+    // Log post unlike (only if it was actually liked)
+    if (wasLiked) {
+      ActivityService.log({
+        user: userId,
+        action: 'unlike_post',
+        resource: 'post',
+        resourceId: postId,
+        details: {
+          postAuthorId: post.author.toString()
+        }
+      }).catch(err => logger.error({ err }, 'Failed to log post activity'));
+    }
   }
 
   static async addComment(
@@ -204,6 +279,19 @@ export class PostService {
       "Comment added to post",
     );
 
+    // Log comment on post
+    ActivityService.log({
+      user: userId,
+      action: 'create_comment',
+      resource: 'post',
+      resourceId: postId,
+      details: {
+        commentId: comment._id.toString(),
+        textLength: text.length,
+        postAuthorId: post.author.toString()
+      }
+    }).catch(err => logger.error({ err }, 'Failed to log post activity'));
+
     return comment;
   }
 
@@ -226,6 +314,19 @@ export class PostService {
       comment.author.toString() !== userId &&
       post.author.toString() !== userId
     ) {
+      // Log unauthorized comment deletion
+      ActivityService.log({
+        user: userId,
+        action: 'delete_comment',
+        resource: 'post',
+        resourceId: postId,
+        status: 'failure',
+        details: {
+          reason: 'unauthorized',
+          commentId
+        }
+      }).catch(err => logger.error({ err }, 'Failed to log post activity'));
+      
       throw ApiError.forbidden("You can only delete your own comments");
     }
 
@@ -233,6 +334,18 @@ export class PostService {
     await comment.deleteOne();
 
     logger.info({ postId, commentId, userId }, "Comment deleted from post");
+
+    // Log comment deletion
+    ActivityService.log({
+      user: userId,
+      action: 'delete_comment',
+      resource: 'post',
+      resourceId: postId,
+      status: 'success',
+      details: {
+        commentId
+      }
+    }).catch(err => logger.error({ err }, 'Failed to log post activity'));
   }
 
   static async getUserPosts(
@@ -269,15 +382,43 @@ export class PostService {
     }
 
     if (post.author.toString() !== userId) {
+      // Log unauthorized update attempt
+      ActivityService.log({
+        user: userId,
+        action: 'update_post',
+        resource: 'post',
+        resourceId: postId,
+        status: 'failure',
+        details: {
+          reason: 'unauthorized',
+          postAuthorId: post.author.toString()
+        }
+      }).catch(err => logger.error({ err }, 'Failed to log post activity'));
+      
       throw ApiError.forbidden("You can only edit your own posts");
     }
 
+    const oldCaption = post.caption;
     post.caption = caption;
     await post.save();
 
     await post.populate("author", "username fullName profilePicture");
 
     logger.info({ postId, userId }, "Post caption updated");
+
+    // Log caption update
+    ActivityService.log({
+      user: userId,
+      action: 'update_post',
+      resource: 'post',
+      resourceId: postId,
+      status: 'success',
+      details: {
+        updatedField: 'caption',
+        oldCaptionLength: oldCaption?.length || 0,
+        newCaptionLength: caption.length
+      }
+    }).catch(err => logger.error({ err }, 'Failed to log post activity'));
 
     return post;
   }
