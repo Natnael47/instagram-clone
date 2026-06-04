@@ -6,6 +6,7 @@ import {
   verifyToken,
 } from "@utils/generateToken";
 import { logger } from "@utils/logger";
+import { ActivityService } from "./activity.service";
 
 /**
  * Authentication Service
@@ -51,6 +52,19 @@ export class AuthService {
 
     logger.info({ userId: user._id, email: user.email }, "New user registered");
 
+    // Log signup activity
+    ActivityService.log({
+      user: user._id.toString(),
+      action: "signup",
+      resource: "user",
+      resourceId: user._id.toString(),
+      details: {
+        username: userData.username,
+        email: userData.email,
+        fullName: userData.fullName,
+      },
+    }).catch((err) => logger.error({ err }, "Failed to log signup activity"));
+
     const accessToken = generateAccessToken(user._id.toString());
     const refreshToken = generateRefreshToken(user._id.toString());
 
@@ -73,11 +87,35 @@ export class AuthService {
     }).select("+password");
 
     if (!user) {
+      // Log failed login attempt
+      ActivityService.log({
+        user: "unknown",
+        action: "login",
+        resource: "user",
+        status: "failure",
+        details: {
+          reason: "user_not_found",
+          emailOrUsername,
+        },
+      }).catch((err) => logger.error({ err }, "Failed to log login activity"));
+
       throw ApiError.unauthorized("Invalid credentials");
     }
 
     const isPasswordMatch = await user.matchPassword(password);
     if (!isPasswordMatch) {
+      // Log failed login attempt
+      ActivityService.log({
+        user: user._id.toString(),
+        action: "login",
+        resource: "user",
+        status: "failure",
+        details: {
+          reason: "invalid_password",
+          emailOrUsername,
+        },
+      }).catch((err) => logger.error({ err }, "Failed to log login activity"));
+
       throw ApiError.unauthorized("Invalid credentials");
     }
 
@@ -85,6 +123,17 @@ export class AuthService {
     const refreshToken = generateRefreshToken(user._id.toString());
 
     logger.info({ userId: user._id, email: user.email }, "User logged in");
+
+    // Log successful login
+    ActivityService.log({
+      user: user._id.toString(),
+      action: "login",
+      resource: "user",
+      status: "success",
+      details: {
+        method: "password",
+      },
+    }).catch((err) => logger.error({ err }, "Failed to log login activity"));
 
     const userObject = user.toObject();
     const { password: _, ...userWithoutPassword } = userObject;
@@ -109,6 +158,15 @@ export class AuthService {
     const accessToken = generateAccessToken(user._id.toString());
 
     logger.info({ userId: user._id }, "Access token refreshed");
+
+    // Log token refresh
+    ActivityService.log({
+      user: user._id.toString(),
+      action: "refresh_token",
+      resource: "user",
+    }).catch((err) =>
+      logger.error({ err }, "Failed to log refresh token activity"),
+    );
 
     return { accessToken };
   }
@@ -150,6 +208,17 @@ export class AuthService {
     // Verify current password
     const isPasswordMatch = await user.matchPassword(currentPassword);
     if (!isPasswordMatch) {
+      // Log failed password change
+      ActivityService.log({
+        user: userId,
+        action: "change_password",
+        resource: "user",
+        status: "failure",
+        details: { reason: "incorrect_current_password" },
+      }).catch((err) =>
+        logger.error({ err }, "Failed to log password change activity"),
+      );
+
       throw ApiError.badRequest("Current password is incorrect");
     }
 
@@ -158,6 +227,16 @@ export class AuthService {
     await user.save();
 
     logger.info({ userId }, "User changed password");
+
+    // Log successful password change
+    ActivityService.log({
+      user: userId,
+      action: "change_password",
+      resource: "user",
+      status: "success",
+    }).catch((err) =>
+      logger.error({ err }, "Failed to log password change activity"),
+    );
   }
 
   /**
@@ -170,6 +249,18 @@ export class AuthService {
     if (!user) {
       // Don't reveal that user doesn't exist for security
       logger.info({ email }, "Password reset requested for non-existent email");
+
+      // Log failed password reset attempt
+      ActivityService.log({
+        user: "unknown",
+        action: "password_reset",
+        resource: "user",
+        status: "failure",
+        details: { reason: "email_not_found", email },
+      }).catch((err) =>
+        logger.error({ err }, "Failed to log password reset activity"),
+      );
+
       return "If an account exists, a reset link will be sent";
     }
 
@@ -177,6 +268,17 @@ export class AuthService {
     const resetToken = generateAccessToken(user._id.toString());
 
     logger.info({ userId: user._id, email }, "Password reset token generated");
+
+    // Log password reset request
+    ActivityService.log({
+      user: user._id.toString(),
+      action: "password_reset",
+      resource: "user",
+      status: "success",
+      details: { method: "email" },
+    }).catch((err) =>
+      logger.error({ err }, "Failed to log password reset activity"),
+    );
 
     // In production, send email with reset link
     // For now, return token (in real app, this would be emailed)
@@ -208,6 +310,17 @@ export class AuthService {
     await user.save();
 
     logger.info({ userId: user._id }, "User reset password");
+
+    // Log successful password reset
+    ActivityService.log({
+      user: user._id.toString(),
+      action: "password_reset",
+      resource: "user",
+      status: "success",
+      details: { method: "token" },
+    }).catch((err) =>
+      logger.error({ err }, "Failed to log password reset activity"),
+    );
   }
 
   /**
@@ -258,6 +371,20 @@ export class AuthService {
     }
 
     logger.info({ userId }, "User profile updated");
+
+    // Log profile update
+    ActivityService.log({
+      user: userId,
+      action: "update_profile",
+      resource: "user",
+      resourceId: userId,
+      details: {
+        updatedFields: Object.keys(updateData),
+        hasProfilePicture: !!updateData.profilePicture,
+      },
+    }).catch((err) =>
+      logger.error({ err }, "Failed to log profile update activity"),
+    );
 
     return user;
   }
