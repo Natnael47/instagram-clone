@@ -1,4 +1,5 @@
 import { Router } from "express";
+import activityRoutes from "./activity.routes";
 import authRoutes from "./auth.routes";
 import commentRoutes from "./comment.routes";
 import feedRoutes from "./feed.routes";
@@ -19,6 +20,7 @@ router.use("/stories", storyRoutes);
 router.use("/comments", commentRoutes);
 router.use("/messages", messageRoutes);
 router.use("/notifications", notificationRoutes);
+router.use("/activity", activityRoutes);
 
 // Health check is already in app.ts
 

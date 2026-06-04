@@ -9,6 +9,7 @@ import {
   parsePaginationParams,
 } from "@utils/pagination";
 import { Types } from "mongoose";
+import { ActivityService } from "./activity.service";
 
 export class MessageService {
   static async sendMessageToConversation(
@@ -22,6 +23,18 @@ export class MessageService {
     }
 
     if (!conversation.participants.some((p) => p.toString() === senderId)) {
+      // Log unauthorized message attempt
+      ActivityService.log({
+        user: senderId,
+        action: 'send_message',
+        resource: 'message',
+        status: 'failure',
+        details: {
+          reason: 'not_participant',
+          conversationId
+        }
+      }).catch(err => logger.error({ err }, 'Failed to log message activity'));
+      
       throw ApiError.forbidden(
         "You are not a participant in this conversation",
       );
@@ -72,6 +85,21 @@ export class MessageService {
       "Message sent",
     );
 
+    // Log successful message
+    ActivityService.log({
+      user: senderId,
+      action: 'send_message',
+      resource: 'message',
+      resourceId: message._id.toString(),
+      status: 'success',
+      details: {
+        conversationId,
+        messageType: 'text',
+        textLength: text.length,
+        recipientCount: conversation.participants.length - 1
+      }
+    }).catch(err => logger.error({ err }, 'Failed to log message activity'));
+
     return { message, conversation };
   }
 
@@ -92,6 +120,8 @@ export class MessageService {
     let conversation = await Conversation.findOne({
       participants: { $all: [senderId, recipientId] },
     });
+
+    const isNewConversation = !conversation;
 
     if (!conversation) {
       conversation = await Conversation.create({
@@ -152,6 +182,37 @@ export class MessageService {
       },
       "Message sent to user",
     );
+
+    // Log message and possibly conversation creation
+    ActivityService.log({
+      user: senderId,
+      action: 'send_message',
+      resource: 'message',
+      resourceId: message._id.toString(),
+      status: 'success',
+      details: {
+        conversationId: conversation._id.toString(),
+        recipientId,
+        isNewConversation,
+        messageType: 'text',
+        textLength: text.length
+      }
+    }).catch(err => logger.error({ err }, 'Failed to log message activity'));
+
+    // Log conversation creation if this is a new conversation
+    if (isNewConversation) {
+      ActivityService.log({
+        user: senderId,
+        action: 'create_conversation',
+        resource: 'conversation',
+        resourceId: conversation._id.toString(),
+        status: 'success',
+        details: {
+          participantCount: 2,
+          initiatedBy: senderId
+        }
+      }).catch(err => logger.error({ err }, 'Failed to log conversation activity'));
+    }
 
     return { message, conversation };
   }
@@ -310,13 +371,39 @@ export class MessageService {
     }
 
     if (message.sender.toString() !== userId) {
+      // Log unauthorized delete attempt
+      ActivityService.log({
+        user: userId,
+        action: 'delete_message',
+        resource: 'message',
+        resourceId: messageId,
+        status: 'failure',
+        details: {
+          reason: 'unauthorized',
+          messageSender: message.sender.toString()
+        }
+      }).catch(err => logger.error({ err }, 'Failed to log message activity'));
+      
       throw ApiError.forbidden("You can only delete your own messages");
     }
 
+    const conversationId = message.conversation.toString();
     message.isDeleted = true;
     await message.save();
 
     logger.info({ messageId, userId }, "Message deleted");
+
+    // Log message deletion
+    ActivityService.log({
+      user: userId,
+      action: 'delete_message',
+      resource: 'message',
+      resourceId: messageId,
+      status: 'success',
+      details: {
+        conversationId
+      }
+    }).catch(err => logger.error({ err }, 'Failed to log message activity'));
   }
 
   static async getUnreadCount(userId: string): Promise<number> {
