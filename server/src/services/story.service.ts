@@ -6,6 +6,7 @@ import { getIO } from "@socket/index";
 import { ApiError } from "@utils/ApiError";
 import { logger } from "@utils/logger";
 import { Types } from "mongoose";
+import { ActivityService } from "./activity.service";
 
 export class StoryService {
   static async createStory(
@@ -52,10 +53,21 @@ export class StoryService {
 
     logger.info({ storyId: story._id, userId }, "New story created");
 
+    // Log story creation
+    ActivityService.log({
+      user: userId,
+      action: 'create_story',
+      resource: 'story',
+      resourceId: story._id.toString(),
+      details: {
+        expiresAt: expiresAt.toISOString(),
+        duration: '24h'
+      }
+    }).catch(err => logger.error({ err }, 'Failed to log story activity'));
+
     return story;
   }
 
-  // Rest of the class remains unchanged...
   static async getFollowedStories(userId: string): Promise<any[]> {
     const currentUser = await User.findById(userId);
     if (!currentUser) {
@@ -108,6 +120,23 @@ export class StoryService {
     return result;
   }
 
+  static async getMyStories(userId: string): Promise<StoryDocument[]> {
+    const stories = await Story.find({
+      author: new Types.ObjectId(userId),
+      expiresAt: { $gt: new Date() },
+    })
+      .populate("author", "username fullName profilePicture")
+      .populate("viewers", "username fullName profilePicture")
+      .sort({ createdAt: -1 });
+
+    logger.info(
+      { userId, storyCount: stories.length },
+      "My stories retrieved",
+    );
+
+    return stories;
+  }
+
   static async getUserStories(userId: string): Promise<StoryDocument[]> {
     const user = await User.findById(userId);
     if (!user) {
@@ -140,10 +169,25 @@ export class StoryService {
     }
 
     if (story.expiresAt < new Date()) {
+      // Log expired story view attempt
+      ActivityService.log({
+        user: viewerId,
+        action: 'view_story',
+        resource: 'story',
+        resourceId: storyId,
+        status: 'failure',
+        details: {
+          reason: 'expired',
+          storyAuthorId: story.author.toString()
+        }
+      }).catch(err => logger.error({ err }, 'Failed to log story activity'));
+      
       throw ApiError.badRequest("Story has expired");
     }
 
-    if (story.author.toString() !== viewerId) {
+    const isNewView = story.author.toString() !== viewerId;
+    
+    if (isNewView) {
       const viewerObjectId = new Types.ObjectId(viewerId);
       const viewerIds = story.viewers.map((v) => v.toString());
       if (!viewerIds.includes(viewerId)) {
@@ -163,6 +207,20 @@ export class StoryService {
 
     logger.info({ storyId, viewerId }, "Story viewed");
 
+    // Log story view (only for new views, not author checking their own story)
+    if (isNewView) {
+      ActivityService.log({
+        user: viewerId,
+        action: 'view_story',
+        resource: 'story',
+        resourceId: storyId,
+        details: {
+          storyAuthorId: story.author.toString(),
+          isNewView: true
+        }
+      }).catch(err => logger.error({ err }, 'Failed to log story activity'));
+    }
+
     return story;
   }
 
@@ -173,6 +231,19 @@ export class StoryService {
     }
 
     if (story.author.toString() !== userId) {
+      // Log unauthorized delete attempt
+      ActivityService.log({
+        user: userId,
+        action: 'delete_story',
+        resource: 'story',
+        resourceId: storyId,
+        status: 'failure',
+        details: {
+          reason: 'unauthorized',
+          storyAuthorId: story.author.toString()
+        }
+      }).catch(err => logger.error({ err }, 'Failed to log story activity'));
+      
       throw ApiError.forbidden("You can only delete your own stories");
     }
 
@@ -183,5 +254,14 @@ export class StoryService {
     await Story.findByIdAndDelete(storyId);
 
     logger.info({ storyId, userId }, "Story deleted");
+
+    // Log story deletion
+    ActivityService.log({
+      user: userId,
+      action: 'delete_story',
+      resource: 'story',
+      resourceId: storyId,
+      status: 'success'
+    }).catch(err => logger.error({ err }, 'Failed to log story activity'));
   }
 }

@@ -8,6 +8,7 @@ import {
   parsePaginationParams,
 } from "@utils/pagination";
 import mongoose from "mongoose";
+import { ActivityService } from "./activity.service";
 
 export class UserService {
   static async getUserProfile(
@@ -33,6 +34,17 @@ export class UserService {
         );
         (userObject as any).isFollowedByCurrentUser = isFollowed;
       }
+
+      // Log profile view (only when viewing other users' profiles)
+      ActivityService.log({
+        user: currentUserId,
+        action: 'view_profile',
+        resource: 'user',
+        resourceId: userId,
+        details: {
+          viewedUser: userId
+        }
+      }).catch(err => logger.error({ err }, 'Failed to log profile view activity'));
     }
 
     return userObject;
@@ -86,6 +98,17 @@ export class UserService {
       { followerId, targetUserId },
       "User started following another user",
     );
+
+    // Log follow action
+    ActivityService.log({
+      user: followerId,
+      action: 'follow',
+      resource: 'user',
+      resourceId: targetUserId,
+      details: {
+        followedUser: targetUserId
+      }
+    }).catch(err => logger.error({ err }, 'Failed to log follow activity'));
   }
 
   static async unfollowUser(
@@ -101,6 +124,16 @@ export class UserService {
       throw ApiError.notFound("User to unfollow not found");
     }
 
+    const follower = await User.findById(followerId);
+    if (!follower) {
+      throw ApiError.notFound("Follower not found");
+    }
+
+    // Check if actually following before unfollowing
+    const wasFollowing = follower.following.some(
+      (id) => id.toString() === targetUserId
+    );
+
     await User.findByIdAndUpdate(followerId, {
       $pull: { following: new mongoose.Types.ObjectId(targetUserId) },
     });
@@ -110,12 +143,26 @@ export class UserService {
     });
 
     logger.info({ followerId, targetUserId }, "User unfollowed another user");
+
+    // Log unfollow action (only if they were actually following)
+    if (wasFollowing) {
+      ActivityService.log({
+        user: followerId,
+        action: 'unfollow',
+        resource: 'user',
+        resourceId: targetUserId,
+        details: {
+          unfollowedUser: targetUserId
+        }
+      }).catch(err => logger.error({ err }, 'Failed to log unfollow activity'));
+    }
   }
 
   static async searchUsers(
     query: string,
     page?: string | number,
     limit?: string | number,
+    currentUserId?: string,
   ) {
     const {
       page: pageNum,
@@ -142,6 +189,20 @@ export class UserService {
       { query, page: pageNum, limit: limitNum, total },
       "Users searched",
     );
+
+    // Log search action
+    if (currentUserId) {
+      ActivityService.log({
+        user: currentUserId,
+        action: 'search',
+        resource: 'user',
+        details: {
+          searchQuery: query,
+          resultsCount: total,
+          page: pageNum
+        }
+      }).catch(err => logger.error({ err }, 'Failed to log search activity'));
+    }
 
     return formatPaginatedResult(users, pageNum, limitNum, total);
   }
