@@ -158,18 +158,29 @@ export class AuthController {
   });
 
   /**
-   * Logout user
-   * POST /api/v1/auth/logout
-   */
-  static logout = asyncHandler(async (req: Request, res: Response) => {
-    const userId = req.user?._id;
+ * Logout user
+ * POST /api/v1/auth/logout
+ */
+static logout = asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.user?._id?.toString();
+  
+  if (userId) {
+    // Extract token from header for blacklisting
+    const authHeader = req.headers.authorization;
+    const token = authHeader?.startsWith("Bearer ") 
+      ? authHeader.split(" ")[1] 
+      : null;
 
-    if (userId) {
-      logger.info({ userId }, "User logged out");
+    if (token) {
+      await AuthService.logout(userId, token);
+    } else {
+      logger.warn({ userId }, "Logout called without token");
     }
+  }
 
-    res.status(200).json(ApiResponse.success("Logout successful"));
-  });
+  logger.info({ userId }, "User logged out");
+  res.status(200).json(ApiResponse.success("Logout successful"));
+});
 
   static refreshToken = asyncHandler(async (req: Request, res: Response) => {
     const { refreshToken } = req.body;

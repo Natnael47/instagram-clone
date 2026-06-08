@@ -1,7 +1,10 @@
+import { isRedisAvailable } from "@config/redis";
 import { asyncHandler } from "@middleware/asyncHandler";
 import { User, type UserDocument } from "@models/User";
+import { RedisService } from "@services/redis.service";
 import { ApiError } from "@utils/ApiError";
 import { extractTokenFromHeader, verifyToken } from "@utils/generateToken";
+import { logger } from "@utils/logger";
 import type { NextFunction, Request, Response } from "express";
 
 declare global {
@@ -9,6 +12,49 @@ declare global {
     interface Request {
       user?: UserDocument;
     }
+  }
+}
+
+/**
+ * Check if token is blacklisted in Redis
+ * @param token - JWT token to check
+ * @returns true if token is blacklisted
+ */
+async function isTokenBlacklisted(token: string): Promise<boolean> {
+  if (!isRedisAvailable()) {
+    return false; // Can't check blacklist without Redis
+  }
+
+  try {
+    const blacklisted = await RedisService.get(`blacklist:token:${token}`);
+    return blacklisted !== null;
+  } catch (error) {
+    logger.error({ err: error }, "Failed to check token blacklist");
+    return false; // Fail open - allow access if Redis check fails
+  }
+}
+
+/**
+ * Blacklist a token in Redis (used on logout)
+ * @param token - JWT token to blacklist
+ * @param expiresInSeconds - Token expiration in seconds
+ */
+export async function blacklistToken(
+  token: string,
+  expiresInSeconds: number = 900, // 15 minutes default
+): Promise<void> {
+  if (!isRedisAvailable()) {
+    logger.warn("Cannot blacklist token - Redis not available");
+    return;
+  }
+
+  try {
+    await RedisService.set(`blacklist:token:${token}`, "1", {
+      ttl: expiresInSeconds,
+    });
+    logger.info("Token blacklisted in Redis");
+  } catch (error) {
+    logger.error({ err: error }, "Failed to blacklist token");
   }
 }
 
@@ -27,6 +73,14 @@ export const protect = asyncHandler(
       throw ApiError.unauthorized("Not authorized. No token provided.");
     }
 
+    // Check if token is blacklisted (Redis)
+    const blacklisted = await isTokenBlacklisted(token);
+    if (blacklisted) {
+      throw ApiError.unauthorized(
+        "Token has been revoked. Please login again.",
+      );
+    }
+
     // Verify token
     const decoded = verifyToken(token);
     if (!decoded || !decoded.id) {
@@ -37,6 +91,22 @@ export const protect = asyncHandler(
     const user = await User.findById(decoded.id).select("-password");
     if (!user) {
       throw ApiError.unauthorized("Not authorized. User no longer exists.");
+    }
+
+    // Cache user in Redis for faster subsequent requests
+    if (isRedisAvailable()) {
+      RedisService.set(
+        `user:${user._id.toString()}`,
+        JSON.stringify({
+          _id: user._id,
+          username: user.username,
+          email: user.email,
+          fullName: user.fullName,
+          profilePicture: user.profilePicture,
+        }),
+        { ttl: 300 },
+      ) // Cache for 5 minutes
+        .catch((err) => logger.error({ err }, "Failed to cache user in Redis"));
     }
 
     // Attach user to request
@@ -56,11 +126,53 @@ export const optionalAuth = asyncHandler(
     const token = extractTokenFromHeader(authHeader);
 
     if (token) {
+      // Check if token is blacklisted
+      const blacklisted = await isTokenBlacklisted(token);
+      if (blacklisted) {
+        // Token is blacklisted, continue without user
+        return next();
+      }
+
       const decoded = verifyToken(token);
       if (decoded && decoded.id) {
-        const user = await User.findById(decoded.id).select("-password");
+        // Try to get user from Redis cache first
+        let user = null;
+
+        if (isRedisAvailable()) {
+          try {
+            const cachedUser = await RedisService.get(`user:${decoded.id}`);
+            if (cachedUser) {
+              user = JSON.parse(cachedUser);
+            }
+          } catch {
+            // Cache miss or error, fall through to database
+          }
+        }
+
+        // If not in cache, get from database
+        if (!user) {
+          user = await User.findById(decoded.id).select("-password");
+
+          // Cache for future requests
+          if (user && isRedisAvailable()) {
+            RedisService.set(
+              `user:${user._id.toString()}`,
+              JSON.stringify({
+                _id: user._id,
+                username: user.username,
+                email: user.email,
+                fullName: user.fullName,
+                profilePicture: user.profilePicture,
+              }),
+              { ttl: 300 },
+            ).catch((err) =>
+              logger.error({ err }, "Failed to cache user in Redis"),
+            );
+          }
+        }
+
         if (user) {
-          req.user = user;
+          req.user = user as UserDocument;
         }
       }
     }

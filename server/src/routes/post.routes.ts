@@ -178,4 +178,11 @@ router.get(
   PostController.getUserPosts
 );
 
+// Popular posts - MUST be before /:id routes
+router.get(
+  "/popular",
+  protect,
+  PostController.getPopularPosts
+);
+
 export default router;

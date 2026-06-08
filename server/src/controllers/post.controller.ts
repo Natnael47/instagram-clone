@@ -228,4 +228,20 @@ export class PostController {
         .json(ApiResponse.success("Feed retrieved successfully", result));
     },
   );
+
+  /**
+ * Get popular posts
+ * GET /api/v1/posts/popular
+ */
+static getPopularPosts = asyncHandler(async (req: Request, res: Response) => {
+  const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 10;
+
+  const posts = await PostService.getPopularPosts(limit);
+
+  logger.info({ limit }, "Popular posts retrieved");
+
+  res
+    .status(200)
+    .json(ApiResponse.success("Popular posts retrieved successfully", { posts }));
+});
 }
