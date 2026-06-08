@@ -3,6 +3,7 @@ import { env } from "@config/env";
 import { logger } from "@utils/logger";
 import cron, { ScheduledTask } from "node-cron";
 import { ActivityCleanup } from "./activityCleanup";
+import { RedisHealthChecker } from "./redisHealthChecker";
 
 /**
  * Cron Job Manager
@@ -16,26 +17,33 @@ export class CronManager {
    * Called once during server startup
    */
   static initialize(): void {
-    if (env.NODE_ENV !== "production") {
-      logger.info("Cron jobs are disabled in non-production environment");
+    // Skip ALL cron jobs in test environment
+    if (env.NODE_ENV === "test") {
+      logger.info("Cron jobs are disabled in test environment");
       return;
     }
 
-    logger.info("Initializing cron jobs for production...");
+    // Redis health check runs in BOTH development and production
+    this.registerRedisHealthCheck();
 
-    // Register all cron jobs here
-    this.registerActivityCleanup();
-    this.registerStoryExpiryCheck();
+    // These jobs only run in production
+    if (env.NODE_ENV === "production") {
+      logger.info("Initializing production cron jobs...");
+      this.registerActivityCleanup();
+      this.registerStoryExpiryCheck();
+    } else {
+      logger.info(
+        "Production cron jobs are disabled in development environment",
+      );
+    }
 
-    logger.info(`Total cron jobs scheduled: ${this.jobs.size}`);
-    this.jobs.forEach((_job, name) => {
-      logger.info(`  ✓ ${name}`);
-    });
+    this.logScheduledJobs();
   }
 
   /**
    * Activity log cleanup - Runs every Monday at 3:00 AM
    * Cron: 0 3 * * 1 (At 03:00 on Monday)
+   * PRODUCTION ONLY
    */
   private static registerActivityCleanup(): void {
     const job = cron.schedule("0 3 * * 1", async () => {
@@ -57,12 +65,12 @@ export class CronManager {
   /**
    * Story expiry check - Runs every hour
    * Cleans up expired stories
+   * PRODUCTION ONLY
    */
   private static registerStoryExpiryCheck(): void {
     const job = cron.schedule("0 * * * *", async () => {
       logger.debug("[CRON] Checking for expired stories...");
       try {
-        // Import dynamically to avoid circular dependencies
         const { Story } = await import("@models/Story");
         const now = new Date();
 
@@ -72,8 +80,6 @@ export class CronManager {
 
         if (expiredStories > 0) {
           logger.info(`[CRON] Found ${expiredStories} expired stories`);
-          // Optionally delete expired stories
-          // await Story.deleteMany({ expiresAt: { $lt: now } });
         }
       } catch (error) {
         logger.error(error, "[CRON] Story expiry check failed");
@@ -82,6 +88,55 @@ export class CronManager {
 
     this.jobs.set("storyExpiryCheck", job);
     logger.info("✓ Story expiry check scheduled: Every hour");
+  }
+
+  /**
+   * Redis health check - Runs based on REDIS_RETRY_INTERVAL env variable
+   * Attempts reconnection if Redis is disconnected
+   * RUNS IN BOTH DEVELOPMENT AND PRODUCTION
+   */
+  private static registerRedisHealthCheck(): void {
+    // READ FROM ENV, NOT HARDCODED!
+    const intervalMinutes = env.REDIS_RETRY_INTERVAL || 10;
+
+    let cronExpression: string;
+    if (intervalMinutes === 1) {
+      cronExpression = "* * * * *"; // Every minute
+    } else if (intervalMinutes <= 59) {
+      cronExpression = `*/${intervalMinutes} * * * *`; // Every N minutes
+    } else {
+      const hours = Math.floor(intervalMinutes / 60);
+      cronExpression = `0 */${hours} * * *`; // Every N hours
+    }
+
+    const job = cron.schedule(cronExpression, async () => {
+      logger.debug("[CRON] Running Redis health check...");
+      try {
+        await RedisHealthChecker.check();
+      } catch (error) {
+        logger.error(error, "[CRON] Redis health check failed");
+      }
+    });
+
+    this.jobs.set("redisHealthCheck", job);
+    logger.info(
+      `✓ Redis health check scheduled: Every ${intervalMinutes} minute(s)`,
+    );
+  }
+
+  /**
+   * Log all scheduled jobs
+   */
+  private static logScheduledJobs(): void {
+    if (this.jobs.size === 0) {
+      logger.info("No cron jobs scheduled");
+      return;
+    }
+
+    logger.info(`Total cron jobs scheduled: ${this.jobs.size}`);
+    this.jobs.forEach((_job, name) => {
+      logger.info(`  ✓ ${name}`);
+    });
   }
 
   /**
@@ -103,12 +158,10 @@ export class CronManager {
    */
   static getStatus(): Array<{ name: string; running: boolean }> {
     const status: Array<{ name: string; running: boolean }> = [];
-    this.jobs.forEach((job, name) => {
-      // Check if job is running by trying to get its status
-      const running = true; // ScheduledTask doesn't expose running state directly
+    this.jobs.forEach((_job, name) => {
       status.push({
         name,
-        running,
+        running: true,
       });
     });
     return status;
