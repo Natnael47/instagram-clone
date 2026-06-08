@@ -1,3 +1,4 @@
+import { isRedisAvailable } from "@config/redis";
 import { Post } from "@models/Post";
 import { User } from "@models/User";
 import { ApiError } from "@utils/ApiError";
@@ -8,6 +9,7 @@ import {
 } from "@utils/pagination";
 import mongoose from "mongoose";
 import { ActivityService } from "./activity.service";
+import { RedisService } from "./redis.service";
 
 /**
  * Feed Service
@@ -33,6 +35,21 @@ export class FeedService {
       skip,
     } = parsePaginationParams(page, limit);
 
+    // Try to get from Redis cache first (only for first page)
+    if (pageNum === 1 && isRedisAvailable()) {
+      try {
+        const cachedFeed = await RedisService.get(
+          `feed:personalized:${userId}`,
+        );
+        if (cachedFeed) {
+          logger.info({ userId }, "Personalized feed served from Redis cache");
+          return JSON.parse(cachedFeed);
+        }
+      } catch (error) {
+        logger.error({ err: error }, "Failed to get cached feed from Redis");
+      }
+    }
+
     // Get current user to find who they follow
     const currentUser = await User.findById(userId);
     if (!currentUser) {
@@ -44,19 +61,18 @@ export class FeedService {
 
     // If user doesn't follow anyone, return empty feed
     if (followingIds.length === 0) {
-      // Log feed refresh even when empty
       ActivityService.log({
         user: userId,
-        action: 'refresh_feed',
-        resource: 'post',
+        action: "refresh_feed",
+        resource: "post",
         details: {
-          feedType: 'personalized',
+          feedType: "personalized",
           followingCount: 0,
           totalPosts: 0,
-          page: pageNum
-        }
-      }).catch(err => logger.error({ err }, 'Failed to log feed activity'));
-      
+          page: pageNum,
+        },
+      }).catch((err) => logger.error({ err }, "Failed to log feed activity"));
+
       return formatPaginatedResult([], pageNum, limitNum, 0);
     }
 
@@ -85,26 +101,42 @@ export class FeedService {
       return postObject;
     });
 
+    const result = formatPaginatedResult(
+      postsWithLikeStatus,
+      pageNum,
+      limitNum,
+      total,
+    );
+
     logger.info(
       { userId, followingCount: followingIds.length, total },
       "Personalized feed generated",
     );
 
+    // Cache first page in Redis for 5 minutes
+    if (pageNum === 1 && isRedisAvailable()) {
+      RedisService.set(
+        `feed:personalized:${userId}`,
+        JSON.stringify(result),
+        { ttl: 300 }, // 5 minutes
+      ).catch((err) => logger.error({ err }, "Failed to cache feed in Redis"));
+    }
+
     // Log feed refresh
     ActivityService.log({
       user: userId,
-      action: 'refresh_feed',
-      resource: 'post',
+      action: "refresh_feed",
+      resource: "post",
       details: {
-        feedType: 'personalized',
+        feedType: "personalized",
         followingCount: followingIds.length,
         totalPosts: total,
         postsReturned: posts.length,
-        page: pageNum
-      }
-    }).catch(err => logger.error({ err }, 'Failed to log feed activity'));
+        page: pageNum,
+      },
+    }).catch((err) => logger.error({ err }, "Failed to log feed activity"));
 
-    return formatPaginatedResult(postsWithLikeStatus, pageNum, limitNum, total);
+    return result;
   }
 
   /**
@@ -125,6 +157,23 @@ export class FeedService {
       limit: limitNum,
       skip,
     } = parsePaginationParams(page, limit);
+
+    // Try to get from Redis cache first (only for first page)
+    const cacheKey = `feed:global:${pageNum}:${limitNum}`;
+    if (pageNum === 1 && isRedisAvailable()) {
+      try {
+        const cachedFeed = await RedisService.get(cacheKey);
+        if (cachedFeed) {
+          logger.info("Global feed served from Redis cache");
+          return JSON.parse(cachedFeed);
+        }
+      } catch (error) {
+        logger.error(
+          { err: error },
+          "Failed to get cached global feed from Redis",
+        );
+      }
+    }
 
     // Query all posts
     const [posts, total] = await Promise.all([
@@ -150,24 +199,38 @@ export class FeedService {
       });
     }
 
+    const result = formatPaginatedResult(
+      postsWithStatus,
+      pageNum,
+      limitNum,
+      total,
+    );
+
     logger.info({ total, page: pageNum }, "Global feed generated");
+
+    // Cache first page in Redis for 5 minutes
+    if (pageNum === 1 && isRedisAvailable()) {
+      RedisService.set(cacheKey, JSON.stringify(result), { ttl: 300 }).catch(
+        (err) => logger.error({ err }, "Failed to cache global feed in Redis"),
+      );
+    }
 
     // Log global feed refresh
     if (userId) {
       ActivityService.log({
         user: userId,
-        action: 'explore_content',
-        resource: 'post',
+        action: "explore_content",
+        resource: "post",
         details: {
-          feedType: 'global',
+          feedType: "global",
           totalPosts: total,
           postsReturned: posts.length,
-          page: pageNum
-        }
-      }).catch(err => logger.error({ err }, 'Failed to log feed activity'));
+          page: pageNum,
+        },
+      }).catch((err) => logger.error({ err }, "Failed to log feed activity"));
     }
 
-    return formatPaginatedResult(postsWithStatus, pageNum, limitNum, total);
+    return result;
   }
 
   /**
@@ -188,6 +251,23 @@ export class FeedService {
       limit: limitNum,
       skip,
     } = parsePaginationParams(page, limit);
+
+    // Try to get from Redis cache first (only for first page)
+    const cacheKey = `feed:trending:${pageNum}:${limitNum}`;
+    if (pageNum === 1 && isRedisAvailable()) {
+      try {
+        const cachedFeed = await RedisService.get(cacheKey);
+        if (cachedFeed) {
+          logger.info("Trending feed served from Redis cache");
+          return JSON.parse(cachedFeed);
+        }
+      } catch (error) {
+        logger.error(
+          { err: error },
+          "Failed to get cached trending feed from Redis",
+        );
+      }
+    }
 
     // Get posts sorted by engagement (likes + comments)
     const [posts, total] = await Promise.all([
@@ -216,24 +296,39 @@ export class FeedService {
       });
     }
 
+    const result = formatPaginatedResult(
+      postsWithStatus,
+      pageNum,
+      limitNum,
+      total,
+    );
+
     logger.info({ total, page: pageNum }, "Trending feed generated");
+
+    // Cache first page in Redis for 5 minutes
+    if (pageNum === 1 && isRedisAvailable()) {
+      RedisService.set(cacheKey, JSON.stringify(result), { ttl: 300 }).catch(
+        (err) =>
+          logger.error({ err }, "Failed to cache trending feed in Redis"),
+      );
+    }
 
     // Log trending feed refresh
     if (userId) {
       ActivityService.log({
         user: userId,
-        action: 'explore_content',
-        resource: 'post',
+        action: "explore_content",
+        resource: "post",
         details: {
-          feedType: 'trending',
+          feedType: "trending",
           totalPosts: total,
           postsReturned: posts.length,
-          page: pageNum
-        }
-      }).catch(err => logger.error({ err }, 'Failed to log feed activity'));
+          page: pageNum,
+        },
+      }).catch((err) => logger.error({ err }, "Failed to log feed activity"));
     }
 
-    return formatPaginatedResult(postsWithStatus, pageNum, limitNum, total);
+    return result;
   }
 
   /**
@@ -289,18 +384,41 @@ export class FeedService {
     if (currentUserId) {
       ActivityService.log({
         user: currentUserId,
-        action: 'explore_content',
-        resource: 'user',
+        action: "explore_content",
+        resource: "user",
         details: {
-          feedType: 'by-users',
+          feedType: "by-users",
           requestedUserCount: userIds.length,
           totalPosts: total,
           postsReturned: posts.length,
-          page: pageNum
-        }
-      }).catch(err => logger.error({ err }, 'Failed to log feed activity'));
+          page: pageNum,
+        },
+      }).catch((err) => logger.error({ err }, "Failed to log feed activity"));
     }
 
     return formatPaginatedResult(postsWithStatus, pageNum, limitNum, total);
+  }
+
+  /**
+   * Invalidate feed caches when new posts are created
+   * Should be called after post creation, like, or comment
+   */
+  static async invalidateFeedCache(userId?: string): Promise<void> {
+    if (!isRedisAvailable()) return;
+
+    try {
+      if (userId) {
+        // Clear user's personalized feed cache
+        await RedisService.del(`feed:personalized:${userId}`);
+      }
+
+      // Clear global feed caches (first page only)
+      await RedisService.clearByPrefix("feed:global:1");
+      await RedisService.clearByPrefix("feed:trending:1");
+
+      logger.info({ userId }, "Feed caches invalidated");
+    } catch (error) {
+      logger.error({ err: error }, "Failed to invalidate feed caches");
+    }
   }
 }

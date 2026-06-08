@@ -1,3 +1,4 @@
+import { isRedisAvailable } from "@config/redis";
 import { Notification } from "@models/Notification";
 import { Post } from "@models/Post";
 import { User } from "@models/User";
@@ -10,6 +11,7 @@ import {
 } from "@utils/pagination";
 import mongoose from "mongoose";
 import { ActivityService } from "./activity.service";
+import { RedisService } from "./redis.service";
 
 export class NotificationService {
   static async createLikeNotification(
@@ -43,6 +45,21 @@ export class NotificationService {
       io.to(`user:${recipientId}`).emit("new-notification", {
         notification: notificationObject,
       });
+
+      // Redis pub/sub for cross-instance notifications
+      if (isRedisAvailable()) {
+        RedisService.publish(
+          "notifications:like",
+          JSON.stringify({
+            recipientId,
+            senderId,
+            postId,
+            notificationId: notification._id.toString(),
+          }),
+        ).catch((err) =>
+          logger.error({ err }, "Failed to publish notification to Redis"),
+        );
+      }
     } catch (socketError) {
       logger.error(socketError, "Failed to emit new-notification socket event");
     }
@@ -52,15 +69,17 @@ export class NotificationService {
     // Log notification creation
     ActivityService.log({
       user: senderId,
-      action: 'like_post',
-      resource: 'notification',
+      action: "like_post",
+      resource: "notification",
       resourceId: notification._id.toString(),
       details: {
-        notificationType: 'like',
+        notificationType: "like",
         recipientId,
-        postId
-      }
-    }).catch(err => logger.error({ err }, 'Failed to log notification activity'));
+        postId,
+      },
+    }).catch((err) =>
+      logger.error({ err }, "Failed to log notification activity"),
+    );
   }
 
   static async createCommentNotification(
@@ -95,6 +114,22 @@ export class NotificationService {
       io.to(`user:${recipientId}`).emit("new-notification", {
         notification: notificationObject,
       });
+
+      // Redis pub/sub for cross-instance notifications
+      if (isRedisAvailable()) {
+        RedisService.publish(
+          "notifications:comment",
+          JSON.stringify({
+            recipientId,
+            senderId,
+            postId,
+            commentId,
+            notificationId: notification._id.toString(),
+          }),
+        ).catch((err) =>
+          logger.error({ err }, "Failed to publish notification to Redis"),
+        );
+      }
     } catch (socketError) {
       logger.error(socketError, "Failed to emit new-notification socket event");
     }
@@ -107,16 +142,18 @@ export class NotificationService {
     // Log notification creation
     ActivityService.log({
       user: senderId,
-      action: 'create_comment',
-      resource: 'notification',
+      action: "create_comment",
+      resource: "notification",
       resourceId: notification._id.toString(),
       details: {
-        notificationType: 'comment',
+        notificationType: "comment",
         recipientId,
         postId,
-        commentId
-      }
-    }).catch(err => logger.error({ err }, 'Failed to log notification activity'));
+        commentId,
+      },
+    }).catch((err) =>
+      logger.error({ err }, "Failed to log notification activity"),
+    );
   }
 
   static async createFollowNotification(
@@ -147,6 +184,20 @@ export class NotificationService {
       io.to(`user:${recipientId}`).emit("new-notification", {
         notification: notificationObject,
       });
+
+      // Redis pub/sub for cross-instance notifications
+      if (isRedisAvailable()) {
+        RedisService.publish(
+          "notifications:follow",
+          JSON.stringify({
+            recipientId,
+            senderId,
+            notificationId: notification._id.toString(),
+          }),
+        ).catch((err) =>
+          logger.error({ err }, "Failed to publish notification to Redis"),
+        );
+      }
     } catch (socketError) {
       logger.error(socketError, "Failed to emit new-notification socket event");
     }
@@ -156,14 +207,16 @@ export class NotificationService {
     // Log notification creation
     ActivityService.log({
       user: senderId,
-      action: 'follow',
-      resource: 'notification',
+      action: "follow",
+      resource: "notification",
       resourceId: notification._id.toString(),
       details: {
-        notificationType: 'follow',
-        recipientId
-      }
-    }).catch(err => logger.error({ err }, 'Failed to log notification activity'));
+        notificationType: "follow",
+        recipientId,
+      },
+    }).catch((err) =>
+      logger.error({ err }, "Failed to log notification activity"),
+    );
   }
 
   static async createStoryViewNotification(
@@ -195,6 +248,21 @@ export class NotificationService {
       io.to(`user:${recipientId}`).emit("new-notification", {
         notification: notificationObject,
       });
+
+      // Redis pub/sub for cross-instance notifications
+      if (isRedisAvailable()) {
+        RedisService.publish(
+          "notifications:story_view",
+          JSON.stringify({
+            recipientId,
+            senderId,
+            storyId,
+            notificationId: notification._id.toString(),
+          }),
+        ).catch((err) =>
+          logger.error({ err }, "Failed to publish notification to Redis"),
+        );
+      }
     } catch (socketError) {
       logger.error(socketError, "Failed to emit new-notification socket event");
     }
@@ -207,15 +275,17 @@ export class NotificationService {
     // Log notification creation
     ActivityService.log({
       user: senderId,
-      action: 'view_story',
-      resource: 'notification',
+      action: "view_story",
+      resource: "notification",
       resourceId: notification._id.toString(),
       details: {
-        notificationType: 'story_view',
+        notificationType: "story_view",
         recipientId,
-        storyId
-      }
-    }).catch(err => logger.error({ err }, 'Failed to log notification activity'));
+        storyId,
+      },
+    }).catch((err) =>
+      logger.error({ err }, "Failed to log notification activity"),
+    );
   }
 
   static async getUserNotifications(
@@ -262,16 +332,18 @@ export class NotificationService {
       // Log unauthorized attempt
       ActivityService.log({
         user: userId,
-        action: 'view_post',
-        resource: 'notification',
+        action: "view_post",
+        resource: "notification",
         resourceId: notificationId,
-        status: 'failure',
+        status: "failure",
         details: {
-          reason: 'unauthorized',
-          operation: 'mark_read'
-        }
-      }).catch(err => logger.error({ err }, 'Failed to log notification activity'));
-      
+          reason: "unauthorized",
+          operation: "mark_read",
+        },
+      }).catch((err) =>
+        logger.error({ err }, "Failed to log notification activity"),
+      );
+
       throw ApiError.forbidden(
         "Not authorized to mark this notification as read",
       );
@@ -285,14 +357,16 @@ export class NotificationService {
     // Log notification read
     ActivityService.log({
       user: userId,
-      action: 'view_post',
-      resource: 'notification',
+      action: "view_post",
+      resource: "notification",
       resourceId: notificationId,
       details: {
-        operation: 'mark_read',
-        notificationType: notification.type
-      }
-    }).catch(err => logger.error({ err }, 'Failed to log notification activity'));
+        operation: "mark_read",
+        notificationType: notification.type,
+      },
+    }).catch((err) =>
+      logger.error({ err }, "Failed to log notification activity"),
+    );
   }
 
   static async markAllAsRead(userId: string): Promise<void> {
@@ -301,18 +375,23 @@ export class NotificationService {
       { $set: { isRead: true } },
     );
 
-    logger.info({ userId, modifiedCount: result.modifiedCount }, "All notifications marked as read");
+    logger.info(
+      { userId, modifiedCount: result.modifiedCount },
+      "All notifications marked as read",
+    );
 
     // Log batch mark as read
     ActivityService.log({
       user: userId,
-      action: 'view_post',
-      resource: 'notification',
+      action: "view_post",
+      resource: "notification",
       details: {
-        operation: 'mark_all_read',
-        count: result.modifiedCount
-      }
-    }).catch(err => logger.error({ err }, 'Failed to log notification activity'));
+        operation: "mark_all_read",
+        count: result.modifiedCount,
+      },
+    }).catch((err) =>
+      logger.error({ err }, "Failed to log notification activity"),
+    );
   }
 
   static async getUnreadCount(userId: string): Promise<number> {
@@ -337,16 +416,18 @@ export class NotificationService {
       // Log unauthorized delete attempt
       ActivityService.log({
         user: userId,
-        action: 'delete_message',
-        resource: 'notification',
+        action: "delete_message",
+        resource: "notification",
         resourceId: notificationId,
-        status: 'failure',
+        status: "failure",
         details: {
-          reason: 'unauthorized',
-          operation: 'delete'
-        }
-      }).catch(err => logger.error({ err }, 'Failed to log notification activity'));
-      
+          reason: "unauthorized",
+          operation: "delete",
+        },
+      }).catch((err) =>
+        logger.error({ err }, "Failed to log notification activity"),
+      );
+
       throw ApiError.forbidden("Not authorized to delete this notification");
     }
 
@@ -358,14 +439,16 @@ export class NotificationService {
     // Log notification deletion
     ActivityService.log({
       user: userId,
-      action: 'delete_message',
-      resource: 'notification',
+      action: "delete_message",
+      resource: "notification",
       resourceId: notificationId,
       details: {
-        operation: 'delete',
-        notificationType
-      }
-    }).catch(err => logger.error({ err }, 'Failed to log notification activity'));
+        operation: "delete",
+        notificationType,
+      },
+    }).catch((err) =>
+      logger.error({ err }, "Failed to log notification activity"),
+    );
   }
 
   static async deleteAllNotifications(userId: string): Promise<void> {
@@ -373,17 +456,22 @@ export class NotificationService {
       recipient: new mongoose.Types.ObjectId(userId),
     });
 
-    logger.info({ userId, deletedCount: result.deletedCount }, "All notifications deleted");
+    logger.info(
+      { userId, deletedCount: result.deletedCount },
+      "All notifications deleted",
+    );
 
     // Log batch deletion
     ActivityService.log({
       user: userId,
-      action: 'delete_message',
-      resource: 'notification',
+      action: "delete_message",
+      resource: "notification",
       details: {
-        operation: 'delete_all',
-        count: result.deletedCount
-      }
-    }).catch(err => logger.error({ err }, 'Failed to log notification activity'));
+        operation: "delete_all",
+        count: result.deletedCount,
+      },
+    }).catch((err) =>
+      logger.error({ err }, "Failed to log notification activity"),
+    );
   }
 }
