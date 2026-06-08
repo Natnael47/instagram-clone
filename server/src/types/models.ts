@@ -1,8 +1,3 @@
-/**
- * TypeScript interfaces for all database models
- * These are used for type safety across the application
- */
-
 import type { Document } from "mongoose";
 
 import type { CommentDocument } from "@models/Comment";
@@ -12,6 +7,7 @@ import type { NotificationDocument } from "@models/Notification";
 import type { PostDocument } from "@models/Post";
 import type { StoryDocument } from "@models/Story";
 import type { UserDocument } from "@models/User";
+import type { IActivity } from "@models/Activity";
 
 // Re-export all document types
 export type {
@@ -22,7 +18,12 @@ export type {
   PostDocument,
   StoryDocument,
   UserDocument,
+  IActivity,
 };
+
+// Redis-related types
+export type { RedisConfig, RedisHealthStatus, RedisCacheOptions } from "./redis.types";
+export { RedisConnectionState } from "./redis.types";
 
 // Utility types
 export type PopulatedDocument<T> = T & {
@@ -64,6 +65,11 @@ export type LeanMessage = Omit<MessageDocument, keyof Document> & {
 };
 
 export type LeanNotification = Omit<NotificationDocument, keyof Document> & {
+  _id: ObjectId;
+};
+
+// Activity types
+export type LeanActivity = Omit<IActivity, keyof Document> & {
   _id: ObjectId;
 };
 
