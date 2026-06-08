@@ -1,7 +1,9 @@
+import { getRedisHealthStatus, isRedisAvailable } from "@config/redis";
 import { socketConfig, SocketEvents } from "@config/socket";
 import { User } from "@models/User";
 import { verifyToken } from "@utils/generateToken";
 import { logger } from "@utils/logger";
+import { RedisStateManager } from "@utils/redisStateManager";
 import { Server as HttpServer } from "http";
 import { Socket, Server as SocketServer } from "socket.io";
 import { chatHandler } from "./handlers/chatHandler";
@@ -16,11 +18,22 @@ export const initializeSocket = async (
 ): Promise<SocketServer> => {
   io = new SocketServer(server, socketConfig);
 
+  // Log Redis status on Socket.IO initialization
+  const redisStatus = getRedisHealthStatus();
+  logger.info(
+    {
+      redisConnected: redisStatus.isConnected,
+      redisState: redisStatus.state,
+    },
+    "Socket.IO server initializing",
+  );
+
   // Log all incoming socket events for debugging
   io.engine.on("connection", (rawSocket) => {
     logger.info({ sid: rawSocket.id }, "Socket.IO raw connection received");
   });
 
+  // Authentication middleware
   io.use(async (socket: Socket, next) => {
     try {
       const token = socket.handshake.auth.token || socket.handshake.query.token;
@@ -60,6 +73,7 @@ export const initializeSocket = async (
     }
   });
 
+  // Handle new connections
   io.on(SocketEvents.CONNECTION, (socket: Socket) => {
     const userId = (socket as any).userId;
     const user = (socket as any).user;
@@ -74,7 +88,16 @@ export const initializeSocket = async (
       "Socket connected",
     );
 
+    // Join user's personal room
     socket.join(`user:${userId}`);
+
+    // Send Redis status to connected client (useful for debugging)
+    if (isRedisAvailable()) {
+      socket.emit("server:status", {
+        redis: "connected",
+        timestamp: new Date().toISOString(),
+      });
+    }
 
     // Log all events this socket receives
     socket.onAny((event, ...args) => {
@@ -86,11 +109,13 @@ export const initializeSocket = async (
       logger.info({ event, userId }, `Socket event sent: ${event}`);
     });
 
+    // Initialize handlers
     chatHandler(io, socket, userId);
     feedHandler(io, socket, userId);
     typingHandler(io, socket, userId);
     onlineHandler(io, socket, userId);
 
+    // Handle disconnect
     socket.on(SocketEvents.DISCONNECT, (reason) => {
       logger.info(
         { userId, socketId: socket.id, reason },
@@ -98,9 +123,29 @@ export const initializeSocket = async (
       );
     });
 
+    // Handle errors
     socket.on(SocketEvents.ERROR, (error: Error) => {
       logger.error({ error, userId }, "Socket error");
     });
+  });
+
+  // Listen for Redis state changes
+  const stateManager = RedisStateManager.getInstance();
+
+  // Check Redis state every 30 seconds and notify if changed
+  const redisCheckInterval = setInterval(() => {
+    const currentState = stateManager.isConnected();
+
+    // Broadcast server status to all connected clients
+    io.emit("server:status", {
+      redis: currentState ? "connected" : "disconnected",
+      timestamp: new Date().toISOString(),
+    });
+  }, 30000);
+
+  // Clean up interval on server shutdown
+  io.engine.on("close", () => {
+    clearInterval(redisCheckInterval);
   });
 
   logger.info("Socket.IO server initialized");
@@ -113,4 +158,18 @@ export const getIO = (): SocketServer => {
     throw new Error("Socket.IO not initialized");
   }
   return io;
+};
+
+/**
+ * Check if Redis is available for Socket.IO operations
+ */
+export const isSocketRedisEnabled = (): boolean => {
+  return isRedisAvailable();
+};
+
+/**
+ * Get current Redis health status
+ */
+export const getSocketRedisStatus = () => {
+  return getRedisHealthStatus();
 };

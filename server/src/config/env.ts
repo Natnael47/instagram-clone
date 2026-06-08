@@ -18,6 +18,20 @@ const envSchema = z.object({
   // Activity logging configs (optional with defaults)
   ACTIVITY_RETENTION_DAYS: z.coerce.number().default(90),
   ACTIVITY_CLEANUP_INTERVAL_HOURS: z.coerce.number().default(24),
+
+  // Redis Configuration
+  REDIS_ENABLED: z.preprocess((val) => {
+    if (typeof val === "string") {
+      return val === "true" || val === "1";
+    }
+    return val === true;
+  }, z.boolean().default(false)),
+  REDIS_URL: z.string().default("redis://localhost:6379"),
+  REDIS_PASSWORD: z.string().optional().default(""),
+  REDIS_DB: z.coerce.number().default(0),
+  REDIS_RETRY_INTERVAL: z.coerce.number().default(10), // minutes
+  REDIS_MAX_RETRIES: z.coerce.number().default(3),
+  REDIS_CONNECT_TIMEOUT: z.coerce.number().default(5000), // milliseconds
 });
 
 export type EnvType = z.infer<typeof envSchema>;
