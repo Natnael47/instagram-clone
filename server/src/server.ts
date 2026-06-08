@@ -1,5 +1,6 @@
 import { connectDB } from "@config/database";
 import { env } from "@config/env";
+import { disconnectRedis, initializeRedis } from "@config/redis";
 import { setupSocket } from "@socket/index";
 import { CronManager } from "@utils/cronManager";
 import { logger } from "@utils/logger";
@@ -8,11 +9,21 @@ import app from "./app";
 
 const startServer = async (): Promise<void> => {
   try {
+    // Connect to MongoDB (required)
     await connectDB();
+    logger.info("MongoDB connected");
+
+    // Initialize Redis (non-blocking, optional)
+    const redisConnected = await initializeRedis();
+    if (redisConnected) {
+      logger.info("Redis initialized successfully ✓");
+    } else {
+      logger.info("Redis not available - continuing without Redis");
+    }
 
     const server = http.createServer(app);
 
-    // Initialize Socket.IO
+    // Initialize Socket.IO (with conditional Redis adapter)
     await setupSocket(server);
     logger.info("Socket.IO initialized");
 
@@ -37,6 +48,9 @@ WebSocket: ws://localhost:${env.PORT}`,
       // Stop cron jobs
       CronManager.stopAll();
 
+      // Disconnect Redis (safe, never throws)
+      await disconnectRedis();
+
       server.close(() => {
         logger.info("HTTP server closed");
         process.exit(0);
@@ -49,15 +63,38 @@ WebSocket: ws://localhost:${env.PORT}`,
       }, 10000);
     };
 
+    // Unhandled rejection - log but DON'T shut down for Redis errors
     process.on("unhandledRejection", (err: Error) => {
-      logger.error("UNHANDLED REJECTION - Shutting down...");
-      logger.error(err.message);
+      logger.error(
+        { err: err.message, stack: err.stack },
+        "UNHANDLED REJECTION",
+      );
+
+      // Only shutdown for critical errors (not Redis)
+      if (err.message?.includes("Redis") || err.message?.includes("ioredis")) {
+        logger.warn("Redis-related unhandled rejection - keeping server alive");
+        return;
+      }
+
+      // For other unhandled rejections, shutdown gracefully
       gracefulShutdown("UNHANDLED REJECTION");
     });
 
     process.on("uncaughtException", (err: Error) => {
-      logger.error("UNCAUGHT EXCEPTION - Shutting down...");
-      logger.error(err.message);
+      logger.error(
+        { err: err.message, stack: err.stack },
+        "UNCAUGHT EXCEPTION",
+      );
+
+      // Don't shutdown for Redis connection errors
+      if (
+        err.message?.includes("Redis") ||
+        err.message?.includes("ECONNREFUSED")
+      ) {
+        logger.warn("Redis-related exception - keeping server alive");
+        return;
+      }
+
       gracefulShutdown("UNCAUGHT EXCEPTION");
     });
 

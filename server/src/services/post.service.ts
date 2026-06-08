@@ -1,3 +1,4 @@
+import { isRedisAvailable } from "@config/redis";
 import { Comment } from "@models/Comment";
 import { Post, type PostDocument } from "@models/Post";
 import { User } from "@models/User";
@@ -11,6 +12,7 @@ import {
 } from "@utils/pagination";
 import mongoose, { Types } from "mongoose";
 import { ActivityService } from "./activity.service";
+import { RedisService } from "./redis.service";
 
 export class PostService {
   static async createPost(
@@ -56,23 +58,61 @@ export class PostService {
 
     logger.info({ postId: post._id, authorId }, "New post created");
 
+    // Invalidate feed caches and clear popular posts cache
+    if (isRedisAvailable()) {
+      Promise.all([
+        RedisService.del(`feed:personalized:${authorId}`),
+        RedisService.clearByPrefix("feed:global:1"),
+        RedisService.clearByPrefix("feed:trending:1"),
+        RedisService.del("post:popular"),
+      ]).catch((err) =>
+        logger.error(
+          { err },
+          "Failed to invalidate caches after post creation",
+        ),
+      );
+    }
+
     // Log post creation
     ActivityService.log({
       user: authorId,
-      action: 'create_post',
-      resource: 'post',
+      action: "create_post",
+      resource: "post",
       resourceId: post._id.toString(),
       details: {
         hasImage: true,
         captionLength: caption?.length || 0,
-        hasCaption: !!caption
-      }
-    }).catch(err => logger.error({ err }, 'Failed to log post activity'));
+        hasCaption: !!caption,
+      },
+    }).catch((err) => logger.error({ err }, "Failed to log post activity"));
 
     return post;
   }
 
   static async getPostById(postId: string, userId?: string): Promise<any> {
+    // Try to get from Redis cache first
+    if (isRedisAvailable()) {
+      try {
+        const cachedPost = await RedisService.get(`post:${postId}`);
+        if (cachedPost) {
+          logger.info({ postId }, "Post served from Redis cache");
+          const post = JSON.parse(cachedPost);
+
+          // Still need to check like status for current user
+          if (userId) {
+            (post as any).isLikedByCurrentUser = post.likes?.some(
+              (like: any) =>
+                like._id?.toString() === userId || like.toString?.() === userId,
+            );
+          }
+
+          return post;
+        }
+      } catch (error) {
+        logger.error({ err: error }, "Failed to get cached post from Redis");
+      }
+    }
+
     const post = await Post.findById(postId)
       .populate("author", "username fullName profilePicture")
       .populate("likes", "username fullName profilePicture");
@@ -98,17 +138,28 @@ export class PostService {
       );
     }
 
+    // Cache post in Redis for 15 minutes
+    if (isRedisAvailable()) {
+      RedisService.set(
+        `post:${postId}`,
+        JSON.stringify(postObject),
+        { ttl: 900 }, // 15 minutes
+      ).catch((err) => logger.error({ err }, "Failed to cache post in Redis"));
+    }
+
     // Log post view (only if viewer is not the author)
     if (userId && post.author._id.toString() !== userId) {
       ActivityService.log({
         user: userId,
-        action: 'view_post',
-        resource: 'post',
+        action: "view_post",
+        resource: "post",
         resourceId: postId,
         details: {
-          authorId: post.author._id.toString()
-        }
-      }).catch(err => logger.error({ err }, 'Failed to log post view activity'));
+          authorId: post.author._id.toString(),
+        },
+      }).catch((err) =>
+        logger.error({ err }, "Failed to log post view activity"),
+      );
     }
 
     return postObject;
@@ -124,16 +175,16 @@ export class PostService {
       // Log unauthorized delete attempt
       ActivityService.log({
         user: userId,
-        action: 'delete_post',
-        resource: 'post',
+        action: "delete_post",
+        resource: "post",
         resourceId: postId,
-        status: 'failure',
+        status: "failure",
         details: {
-          reason: 'unauthorized',
-          postAuthorId: post.author.toString()
-        }
-      }).catch(err => logger.error({ err }, 'Failed to log post activity'));
-      
+          reason: "unauthorized",
+          postAuthorId: post.author.toString(),
+        },
+      }).catch((err) => logger.error({ err }, "Failed to log post activity"));
+
       throw ApiError.forbidden("You can only delete your own posts");
     }
 
@@ -146,16 +197,32 @@ export class PostService {
 
     await Post.findByIdAndDelete(postId);
 
+    // Invalidate caches
+    if (isRedisAvailable()) {
+      Promise.all([
+        RedisService.del(`post:${postId}`),
+        RedisService.del(`feed:personalized:${userId}`),
+        RedisService.clearByPrefix("feed:global:1"),
+        RedisService.clearByPrefix("feed:trending:1"),
+        RedisService.del("post:popular"),
+      ]).catch((err) =>
+        logger.error(
+          { err },
+          "Failed to invalidate caches after post deletion",
+        ),
+      );
+    }
+
     logger.info({ postId, userId }, "Post deleted");
 
     // Log successful post deletion
     ActivityService.log({
       user: userId,
-      action: 'delete_post',
-      resource: 'post',
+      action: "delete_post",
+      resource: "post",
       resourceId: postId,
-      status: 'success'
-    }).catch(err => logger.error({ err }, 'Failed to log post activity'));
+      status: "success",
+    }).catch((err) => logger.error({ err }, "Failed to log post activity"));
   }
 
   static async likePost(postId: string, userId: string): Promise<void> {
@@ -191,18 +258,25 @@ export class PostService {
       logger.error(socketError, "Failed to emit post-liked socket event");
     }
 
+    // Invalidate post cache (like count changed)
+    if (isRedisAvailable()) {
+      RedisService.del(`post:${postId}`).catch((err) =>
+        logger.error({ err }, "Failed to invalidate post cache after like"),
+      );
+    }
+
     logger.info({ postId, userId }, "Post liked");
 
     // Log post like
     ActivityService.log({
       user: userId,
-      action: 'like_post',
-      resource: 'post',
+      action: "like_post",
+      resource: "post",
       resourceId: postId,
       details: {
-        postAuthorId: post.author.toString()
-      }
-    }).catch(err => logger.error({ err }, 'Failed to log post activity'));
+        postAuthorId: post.author.toString(),
+      },
+    }).catch((err) => logger.error({ err }, "Failed to log post activity"));
   }
 
   static async unlikePost(postId: string, userId: string): Promise<void> {
@@ -217,19 +291,26 @@ export class PostService {
       $pull: { likes: new mongoose.Types.ObjectId(userId) },
     });
 
+    // Invalidate post cache (like count changed)
+    if (isRedisAvailable() && wasLiked) {
+      RedisService.del(`post:${postId}`).catch((err) =>
+        logger.error({ err }, "Failed to invalidate post cache after unlike"),
+      );
+    }
+
     logger.info({ postId, userId }, "Post unliked");
 
     // Log post unlike (only if it was actually liked)
     if (wasLiked) {
       ActivityService.log({
         user: userId,
-        action: 'unlike_post',
-        resource: 'post',
+        action: "unlike_post",
+        resource: "post",
         resourceId: postId,
         details: {
-          postAuthorId: post.author.toString()
-        }
-      }).catch(err => logger.error({ err }, 'Failed to log post activity'));
+          postAuthorId: post.author.toString(),
+        },
+      }).catch((err) => logger.error({ err }, "Failed to log post activity"));
     }
   }
 
@@ -282,15 +363,15 @@ export class PostService {
     // Log comment on post
     ActivityService.log({
       user: userId,
-      action: 'create_comment',
-      resource: 'post',
+      action: "create_comment",
+      resource: "post",
       resourceId: postId,
       details: {
         commentId: comment._id.toString(),
         textLength: text.length,
-        postAuthorId: post.author.toString()
-      }
-    }).catch(err => logger.error({ err }, 'Failed to log post activity'));
+        postAuthorId: post.author.toString(),
+      },
+    }).catch((err) => logger.error({ err }, "Failed to log post activity"));
 
     return comment;
   }
@@ -317,16 +398,16 @@ export class PostService {
       // Log unauthorized comment deletion
       ActivityService.log({
         user: userId,
-        action: 'delete_comment',
-        resource: 'post',
+        action: "delete_comment",
+        resource: "post",
         resourceId: postId,
-        status: 'failure',
+        status: "failure",
         details: {
-          reason: 'unauthorized',
-          commentId
-        }
-      }).catch(err => logger.error({ err }, 'Failed to log post activity'));
-      
+          reason: "unauthorized",
+          commentId,
+        },
+      }).catch((err) => logger.error({ err }, "Failed to log post activity"));
+
       throw ApiError.forbidden("You can only delete your own comments");
     }
 
@@ -338,14 +419,14 @@ export class PostService {
     // Log comment deletion
     ActivityService.log({
       user: userId,
-      action: 'delete_comment',
-      resource: 'post',
+      action: "delete_comment",
+      resource: "post",
       resourceId: postId,
-      status: 'success',
+      status: "success",
       details: {
-        commentId
-      }
-    }).catch(err => logger.error({ err }, 'Failed to log post activity'));
+        commentId,
+      },
+    }).catch((err) => logger.error({ err }, "Failed to log post activity"));
   }
 
   static async getUserPosts(
@@ -385,16 +466,16 @@ export class PostService {
       // Log unauthorized update attempt
       ActivityService.log({
         user: userId,
-        action: 'update_post',
-        resource: 'post',
+        action: "update_post",
+        resource: "post",
         resourceId: postId,
-        status: 'failure',
+        status: "failure",
         details: {
-          reason: 'unauthorized',
-          postAuthorId: post.author.toString()
-        }
-      }).catch(err => logger.error({ err }, 'Failed to log post activity'));
-      
+          reason: "unauthorized",
+          postAuthorId: post.author.toString(),
+        },
+      }).catch((err) => logger.error({ err }, "Failed to log post activity"));
+
       throw ApiError.forbidden("You can only edit your own posts");
     }
 
@@ -404,21 +485,28 @@ export class PostService {
 
     await post.populate("author", "username fullName profilePicture");
 
+    // Invalidate post cache
+    if (isRedisAvailable()) {
+      RedisService.del(`post:${postId}`).catch((err) =>
+        logger.error({ err }, "Failed to invalidate post cache after update"),
+      );
+    }
+
     logger.info({ postId, userId }, "Post caption updated");
 
     // Log caption update
     ActivityService.log({
       user: userId,
-      action: 'update_post',
-      resource: 'post',
+      action: "update_post",
+      resource: "post",
       resourceId: postId,
-      status: 'success',
+      status: "success",
       details: {
-        updatedField: 'caption',
+        updatedField: "caption",
         oldCaptionLength: oldCaption?.length || 0,
-        newCaptionLength: caption.length
-      }
-    }).catch(err => logger.error({ err }, 'Failed to log post activity'));
+        newCaptionLength: caption.length,
+      },
+    }).catch((err) => logger.error({ err }, "Failed to log post activity"));
 
     return post;
   }
@@ -463,5 +551,47 @@ export class PostService {
     logger.info({ userId, total }, "Personalized feed retrieved");
 
     return formatPaginatedResult(posts, pageNum, limitNum, total);
+  }
+  /**
+   * Get popular posts (cached in Redis for 15 minutes)
+   * Popular posts are determined by likes count
+   */
+  static async getPopularPosts(limit: number = 10): Promise<any[]> {
+    // Try to get from Redis cache first
+    if (isRedisAvailable()) {
+      try {
+        const cached = await RedisService.get("post:popular");
+        if (cached) {
+          logger.info("Popular posts served from Redis cache");
+          return JSON.parse(cached);
+        }
+      } catch (error) {
+        logger.error(
+          { err: error },
+          "Failed to get cached popular posts from Redis",
+        );
+      }
+    }
+
+    // Get posts sorted by likes count
+    const posts = await Post.find({})
+      .populate("author", "username fullName profilePicture")
+      .populate("likes", "username fullName profilePicture")
+      .sort({ likes: -1 })
+      .limit(limit)
+      .lean();
+
+    // Cache in Redis for 15 minutes
+    if (isRedisAvailable()) {
+      RedisService.set(
+        "post:popular",
+        JSON.stringify(posts),
+        { ttl: 900 }, // 15 minutes
+      ).catch((err) =>
+        logger.error({ err }, "Failed to cache popular posts in Redis"),
+      );
+    }
+
+    return posts;
   }
 }
