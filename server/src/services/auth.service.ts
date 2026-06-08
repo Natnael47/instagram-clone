@@ -1,3 +1,5 @@
+import { isRedisAvailable } from "@config/redis";
+import { blacklistToken } from "@middleware/auth.middleware";
 import { User, type UserDocument } from "@models/User";
 import { ApiError } from "@utils/ApiError";
 import {
@@ -7,6 +9,7 @@ import {
 } from "@utils/generateToken";
 import { logger } from "@utils/logger";
 import { ActivityService } from "./activity.service";
+import { RedisService } from "./redis.service";
 
 /**
  * Authentication Service
@@ -68,6 +71,35 @@ export class AuthService {
     const accessToken = generateAccessToken(user._id.toString());
     const refreshToken = generateRefreshToken(user._id.toString());
 
+    // Cache tokens in Redis (if available)
+    if (isRedisAvailable()) {
+      // Store access token with 15 min TTL
+      RedisService.set(
+        `auth:access:${user._id.toString()}`,
+        accessToken,
+        { ttl: 900 }, // 15 minutes
+      ).catch((err) => logger.error({ err }, "Failed to cache access token"));
+
+      // Store refresh token with 30 day TTL
+      RedisService.set(
+        `auth:refresh:${user._id.toString()}`,
+        refreshToken,
+        { ttl: 30 * 24 * 60 * 60 }, // 30 days
+      ).catch((err) => logger.error({ err }, "Failed to cache refresh token"));
+
+      // Store user session data
+      RedisService.set(
+        `auth:session:${user._id.toString()}`,
+        JSON.stringify({
+          userId: user._id.toString(),
+          username: user.username,
+          email: user.email,
+          loggedInAt: new Date().toISOString(),
+        }),
+        { ttl: 30 * 24 * 60 * 60 }, // 30 days
+      ).catch((err) => logger.error({ err }, "Failed to cache session"));
+    }
+
     const userWithoutPassword = user.toObject();
     const { password, ...userWithoutPass } = userWithoutPassword;
 
@@ -124,6 +156,33 @@ export class AuthService {
 
     logger.info({ userId: user._id, email: user.email }, "User logged in");
 
+    // Cache tokens and session in Redis
+    if (isRedisAvailable()) {
+      // Store tokens
+      await Promise.all([
+        RedisService.set(`auth:access:${user._id.toString()}`, accessToken, {
+          ttl: 900,
+        }),
+        RedisService.set(`auth:refresh:${user._id.toString()}`, refreshToken, {
+          ttl: 30 * 24 * 60 * 60,
+        }),
+        RedisService.set(
+          `auth:session:${user._id.toString()}`,
+          JSON.stringify({
+            userId: user._id.toString(),
+            username: user.username,
+            email: user.email,
+            loggedInAt: new Date().toISOString(),
+          }),
+          { ttl: 30 * 24 * 60 * 60 },
+        ),
+        // Increment login count for analytics
+        RedisService.incr(`stats:login:${user._id.toString()}`),
+      ]).catch((err) =>
+        logger.error({ err }, "Failed to cache auth data in Redis"),
+      );
+    }
+
     // Log successful login
     ActivityService.log({
       user: user._id.toString(),
@@ -144,6 +203,19 @@ export class AuthService {
   static async refreshAccessToken(
     refreshToken: string,
   ): Promise<{ accessToken: string }> {
+    // Check if refresh token is cached in Redis
+    if (isRedisAvailable()) {
+      const decoded = verifyToken(refreshToken);
+      if (decoded && decoded.id) {
+        const cachedToken = await RedisService.get(
+          `auth:refresh:${decoded.id}`,
+        );
+        if (cachedToken && cachedToken !== refreshToken) {
+          throw ApiError.unauthorized("Refresh token has been revoked");
+        }
+      }
+    }
+
     const decoded = verifyToken(refreshToken);
 
     if (!decoded || decoded.type !== "refresh") {
@@ -156,6 +228,15 @@ export class AuthService {
     }
 
     const accessToken = generateAccessToken(user._id.toString());
+
+    // Update access token in Redis
+    if (isRedisAvailable()) {
+      RedisService.set(`auth:access:${user._id.toString()}`, accessToken, {
+        ttl: 900,
+      }).catch((err) =>
+        logger.error({ err }, "Failed to update access token in Redis"),
+      );
+    }
 
     logger.info({ userId: user._id }, "Access token refreshed");
 
@@ -323,69 +404,121 @@ export class AuthService {
     );
   }
 
-  /**
-   * Update user profile
-   * @param userId - User ID
-   * @param updateData - Data to update
-   * @returns Updated user
-   */
-  static async updateProfile(
-    userId: string,
-    updateData: {
-      fullName?: string;
-      bio?: string;
-      username?: string;
-      email?: string;
-      profilePicture?: string;
+ /**
+ * Update user profile
+ * @param userId - User ID
+ * @param updateData - Data to update
+ * @returns Updated user
+ */
+static async updateProfile(
+  userId: string,
+  updateData: {
+    fullName?: string;
+    bio?: string;
+    username?: string;
+    email?: string;
+    profilePicture?: string;
+  },
+): Promise<Partial<UserDocument>> {
+  // Check if username or email is taken
+  if (updateData.username) {
+    const existingUser = await User.findOne({
+      username: updateData.username,
+      _id: { $ne: userId },
+    });
+    if (existingUser) {
+      throw ApiError.conflict("Username already taken");
+    }
+  }
+
+  if (updateData.email) {
+    const existingUser = await User.findOne({
+      email: updateData.email,
+      _id: { $ne: userId },
+    });
+    if (existingUser) {
+      throw ApiError.conflict("Email already registered");
+    }
+  }
+
+  const user = await User.findByIdAndUpdate(
+    userId,
+    { $set: updateData },
+    { new: true, runValidators: true },
+  ).select("-password");
+
+  if (!user) {
+    throw ApiError.notFound("User not found");
+  }
+
+  logger.info({ userId }, "User profile updated");
+
+  // Invalidate cached user profile in Redis (MUST be before return)
+  if (isRedisAvailable()) {
+    RedisService.del(`user:profile:${userId}`)
+      .then(() => {
+        // Also clear user cache used by auth middleware
+        return RedisService.del(`user:${userId}`);
+      })
+      .catch((err) =>
+        logger.error({ err }, "Failed to invalidate user profile cache"),
+      );
+  }
+
+  // Log profile update
+  ActivityService.log({
+    user: userId,
+    action: "update_profile",
+    resource: "user",
+    resourceId: userId,
+    details: {
+      updatedFields: Object.keys(updateData),
+      hasProfilePicture: !!updateData.profilePicture,
     },
-  ): Promise<Partial<UserDocument>> {
-    // Check if username or email is taken
-    if (updateData.username) {
-      const existingUser = await User.findOne({
-        username: updateData.username,
-        _id: { $ne: userId },
-      });
-      if (existingUser) {
-        throw ApiError.conflict("Username already taken");
-      }
+  }).catch((err) =>
+    logger.error({ err }, "Failed to log profile update activity"),
+  );
+
+  return user;
+}
+
+  /**
+   * Logout user - Blacklist token and clear Redis session
+   * @param userId - User ID
+   * @param token - Current access token
+   */
+  static async logout(userId: string, token: string): Promise<void> {
+    // Blacklist the access token
+    await blacklistToken(token, 900); // 15 minutes (matches JWT expiry)
+
+    // Clear Redis session data
+    if (isRedisAvailable()) {
+      await Promise.all([
+        RedisService.del(`auth:access:${userId}`),
+        RedisService.del(`auth:refresh:${userId}`),
+        RedisService.del(`auth:session:${userId}`),
+        RedisService.del(`user:${userId}`), // Clear user cache
+      ]).catch((err) => logger.error({ err }, "Failed to clear Redis session"));
     }
 
-    if (updateData.email) {
-      const existingUser = await User.findOne({
-        email: updateData.email,
-        _id: { $ne: userId },
-      });
-      if (existingUser) {
-        throw ApiError.conflict("Email already registered");
-      }
+    logger.info({ userId }, "User logged out successfully");
+  }
+
+  /**
+   * Check if user session is valid in Redis
+   * @param userId - User ID
+   * @returns true if session exists
+   */
+  static async isSessionValid(userId: string): Promise<boolean> {
+    if (!isRedisAvailable()) {
+      return true; // Can't check without Redis, assume valid
     }
 
-    const user = await User.findByIdAndUpdate(
-      userId,
-      { $set: updateData },
-      { new: true, runValidators: true },
-    ).select("-password");
-
-    if (!user) {
-      throw ApiError.notFound("User not found");
+    try {
+      const session = await RedisService.get(`auth:session:${userId}`);
+      return session !== null;
+    } catch {
+      return true; // Fail open
     }
-
-    logger.info({ userId }, "User profile updated");
-
-    // Log profile update
-    ActivityService.log({
-      user: userId,
-      action: "update_profile",
-      resource: "user",
-      resourceId: userId,
-      details: {
-        updatedFields: Object.keys(updateData),
-        hasProfilePicture: !!updateData.profilePicture,
-      },
-    }).catch((err) =>
-      logger.error({ err }, "Failed to log profile update activity"),
-    );
-
-    return user;
   }
 }
